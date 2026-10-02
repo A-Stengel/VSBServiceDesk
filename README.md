@@ -166,7 +166,7 @@ table shape, twice in a row, with no errors.
    ```bash
    cd api
    npm install
-   func azure functionapp publish func-vsb-servicedesk
+   func azure functionapp publish func-vsb-servicedesk --javascript
    ```
 
    Or use "Deploy to Function App" from the Azure Functions extension in
