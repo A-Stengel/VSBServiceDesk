@@ -1,0 +1,12 @@
+{
+  "$schema": "https://aka.ms/azure/static-web-apps-cli/schema",
+  "configurations": {
+    "servicedesk": {
+      "appLocation": "frontend",
+      "outputLocation": "dist",
+      "appDevserverUrl": "http://localhost:5173",
+      "run": "npm run dev",
+      "apiLocation": "api"
+    }
+  }
+}
