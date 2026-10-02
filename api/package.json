@@ -1,12 +1,18 @@
 {
-  "name": "api",
-  "version": "1.0.0",
+  "name": "vsb-servicedesk-api",
+  "version": "0.1.0",
+  "description": "VSB Service Desk API (Azure Functions v4, Node.js)",
   "main": "src/functions/*.js",
   "scripts": {
     "start": "func start"
   },
   "dependencies": {
-    "@azure/functions": "^4.0.0",
-    "mssql": "^12.5.0"
+    "@azure/functions": "^4.5.0",
+    "@azure/identity": "^4.4.1",
+    "@azure/storage-blob": "^12.24.0",
+    "mssql": "^11.0.1"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

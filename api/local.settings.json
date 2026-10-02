@@ -1,9 +1,12 @@
 {
   "IsEncrypted": false,
   "Values": {
-    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "AzureWebJobsStorage": "",
     "FUNCTIONS_WORKER_RUNTIME": "node",
-    "FUNCTIONS_NODE_BLOCK_ON_ENTRY_POINT_ERROR": "true",
-    "SQL_CONNECTION_STRING": "Server=tcp:sv-vsb-servicedesk.database.windows.net,1433;Initial Catalog=db-VSB-ServiceDesk;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;Authentication=Active Directory Default;"
+    "SQL_SERVER": "sv-vsb-servicedesk.database.windows.net",
+    "SQL_DATABASE": "db-VSB-ServiceDesk",
+    "STORAGE_ACCOUNT": "stvsbservicedesk",
+    "ATTACHMENTS_CONTAINER": "attachments",
+    "ALLOWED_EMAIL_DOMAINS": "vsb.org"
   }
 }
