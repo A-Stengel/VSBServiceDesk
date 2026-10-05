@@ -28,7 +28,15 @@ const LOOKUPS = {
     label: "Priorities",
     columns: [...common, { name: "Rank", label: "Rank (1 = most urgent)", type: "int" }]
   },
-  categories: { table: "dbo.Categories", label: "Categories", columns: common },
+  categories: {
+    table: "dbo.Categories",
+    label: "Categories",
+    columns: [
+      { name: "TicketTypeId", label: "Ticket type", type: "ref", ref: "ticketTypes", required: true },
+      ...common,
+      { name: "ChecklistSource", label: "Checklist", type: "choice", choices: ["onboarding", "change", "offboarding"] }
+    ]
+  },
   subcategories: {
     table: "dbo.Subcategories",
     label: "Subcategories",
@@ -43,8 +51,7 @@ const LOOKUPS = {
       { name: "UsesDates", label: "Uses dates", type: "bit" },
       { name: "UsesInventory", label: "Uses inventory", type: "bit" },
       { name: "UsesLicenses", label: "Uses licenses", type: "bit" },
-      { name: "UsesChecklist", label: "Uses checklist", type: "bit" },
-      { name: "ChecklistSource", label: "Checklist built from", type: "choice", choices: ["onboarding", "offboarding"] }
+      { name: "UsesChecklist", label: "Uses checklist", type: "bit" }
     ]
   },
   departments: {
@@ -69,9 +76,22 @@ const LOOKUPS = {
     columns: [
       ...common,
       { name: "IsTechnician", label: "Technician", type: "bit" },
-      { name: "IsAdmin", label: "Admin", type: "bit" }
+      { name: "IsAdmin", label: "Admin", type: "bit" },
+      { name: "IsEventManager", label: "Event manager", type: "bit" }
     ]
   },
+  bookingStatuses: {
+    table: "dbo.BookingStatuses",
+    label: "Booking statuses",
+    columns: [
+      ...common,
+      { name: "IsActiveBooking", label: "Room is in use", type: "bit", default: true },
+      { name: "Color", label: "Row color", type: "string", max: 20 }
+    ]
+  },
+  // Managed by Event Managers on the Event bookings page (bookings.js), so it
+  // isn't on the Settings page.
+  rooms: { table: "dbo.Rooms", label: "Rooms", columns: common },
   billingPeriods: {
     table: "dbo.BillingPeriods",
     label: "Billing periods",
@@ -105,7 +125,7 @@ const LOOKUPS = {
 };
 
 // The optional fields a ticket type's form can show (dbo.TicketTypeFields.FieldKey).
-const FIELD_KEYS = ["category", "subcategory", "startDate", "endDate", "items", "forUser", "software", "newHire"];
+const FIELD_KEYS = ["category", "subcategory", "startDate", "endDate", "items", "forUser", "software", "newHire", "removals"];
 
 function orderBy(def) {
   return def.order || (def.columns.some((c) => c.name === "SortOrder") ? "SortOrder, Name" : "Name");

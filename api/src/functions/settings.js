@@ -27,6 +27,7 @@ endpoint(
         throw new HttpError(400, `${meta.label} must be one of: ${meta.choices.join(", ")}`);
       }
       if (value !== null && meta.type === "text") value = String(value).slice(0, 1000);
+      if (value !== null && meta.type === "longtext") value = String(value).slice(0, 4000);
       values[meta.key] = value;
     }
     await saveSettings(values);

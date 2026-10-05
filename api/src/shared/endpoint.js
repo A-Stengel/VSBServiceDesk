@@ -3,7 +3,7 @@ const { getCurrentUser } = require("./auth");
 const { HttpError } = require("./errors");
 
 // Registers an HTTP function that looks up the signed-in user, checks their
-// role ("technician" or "admin" when given), turns HttpError into a clean JSON
+// role ("technician", "admin" or "eventManager" when given), turns HttpError into a clean JSON
 // response, and logs anything else as a generic 500 so SQL errors never reach
 // the browser.
 function endpoint(name, { methods, route, role, failMessage }, handler) {
@@ -16,6 +16,7 @@ function endpoint(name, { methods, route, role, failMessage }, handler) {
         const user = await getCurrentUser(request);
         if (role === "technician" && !user.IsTechnician) throw new HttpError(403, "Only technicians can do that");
         if (role === "admin" && !user.IsAdmin) throw new HttpError(403, "Only admins can do that");
+        if (role === "eventManager" && !user.IsEventManager) throw new HttpError(403, "Only event managers can do that");
         return await handler(request, context, user);
       } catch (error) {
         if (error instanceof HttpError) {
@@ -108,6 +109,17 @@ function optionalDate(value, field) {
   return value;
 }
 
+// Accepts YYYY-MM-DDTHH:MM (a datetime-local input) and returns it, or null
+// when empty. Booking times are VSB local time and are stored as typed.
+function optionalDateTime(value, field) {
+  if (value === undefined || value === null || value === "") return null;
+  const match = typeof value === "string" && value.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})(:00)?$/);
+  if (!match || Number.isNaN(Date.parse(`${match[1]}T${match[2]}:${match[3]}:00Z`)) || Number(match[2]) > 23 || Number(match[3]) > 59) {
+    throw new HttpError(400, `${field} must be a date and time`);
+  }
+  return `${match[1]}T${match[2]}:${match[3]}`;
+}
+
 const EMAIL_PATTERN = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
 function emailList(value, field) {
@@ -132,6 +144,7 @@ module.exports = {
   optionalText,
   requiredText,
   optionalDate,
+  optionalDateTime,
   emailList,
   EMAIL_PATTERN,
   isUniqueViolation,

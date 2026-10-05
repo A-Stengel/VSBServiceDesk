@@ -46,6 +46,16 @@ function withFiles(data, files) {
 
 export const api = {
   me: () => request("GET", "me"),
+
+  bookings: (filters = {}) => request("GET", "bookings" + query(filters)),
+  booking: (id) => request("GET", `bookings/${id}`),
+  createBooking: (data) => request("POST", "bookings", data),
+  updateBooking: (id, data) => request("PATCH", `bookings/${id}`, data),
+  bookingAction: (id, action, reason) => request("POST", `bookings/${id}/${action}`, { reason }),
+  rooms: () => request("GET", "bookings/rooms"),
+  createRoom: (data) => request("POST", "bookings/rooms", data),
+  updateRoom: (id, data) => request("PATCH", `bookings/rooms/${id}`, data),
+  saveGuidelines: (text) => request("PUT", "bookings/guidelines", { text }),
   lookups: () => request("GET", "lookups"),
 
   tickets: (filters = {}) => request("GET", "tickets" + query(filters)),
@@ -56,6 +66,8 @@ export const api = {
   addItem: (id, data) => request("POST", `tickets/${id}/items`, data),
   updateItem: (id, itemId, data) => request("PATCH", `tickets/${id}/items/${itemId}`, data),
   updateChecklist: (id, itemId, isDone) => request("PATCH", `tickets/${id}/checklist/${itemId}`, { isDone }),
+  addChecklistLine: (id, data) => request("POST", `tickets/${id}/checklist`, data),
+  holdings: (personId) => request("GET", `people/${personId}/holdings`),
   availability: (params) => request("GET", "inventory/availability" + query(params)),
   licenses: () => request("GET", "licenses"),
 
@@ -67,7 +79,8 @@ export const api = {
   adminLookup: (table) => request("GET", `manage/lookups/${table}`),
   adminCreateLookup: (table, data) => request("POST", `manage/lookups/${table}`, data),
   adminUpdateLookup: (table, id, data) => request("PATCH", `manage/lookups/${table}/${id}`, data),
-  saveTicketTypeFields: (typeId, fields) => request("PUT", `manage/ticket-type-fields/${typeId}`, fields),
+  saveTicketTypeFields: (typeId, categoryId, fields) =>
+    request("PUT", `manage/ticket-type-fields/${typeId}` + query({ categoryId }), fields),
   settings: () => request("GET", "manage/settings"),
   saveSettings: (values) => request("PUT", "manage/settings", values)
 };
@@ -81,6 +94,19 @@ export function formatDate(value) {
 export function formatDay(value) {
   if (!value) return "";
   return new Date(value).toLocaleDateString(undefined, { timeZone: "UTC", dateStyle: "medium" });
+}
+
+// Booking times are VSB local time sent as "2026-11-10T09:00"; show them as
+// typed, with no time zone shift.
+export function formatWall(value) {
+  if (!value) return "";
+  return new Date(`${value}:00Z`).toLocaleString(undefined, { timeZone: "UTC", dateStyle: "medium", timeStyle: "short" });
+}
+
+export function formatWallRange(start, end) {
+  if (!start || !end) return "";
+  const time = (v) => new Date(`${v}:00Z`).toLocaleTimeString(undefined, { timeZone: "UTC", timeStyle: "short" });
+  return start.slice(0, 10) === end.slice(0, 10) ? `${formatWall(start)} to ${time(end)}` : `${formatWall(start)} to ${formatWall(end)}`;
 }
 
 export const dayValue = (value) => (value ? String(value).slice(0, 10) : "");

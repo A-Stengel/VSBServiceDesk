@@ -51,7 +51,8 @@ const USER_SELECT = `
          u.DepartmentId, u.UserTypeId, u.RoleId, u.IsActive,
          r.Name AS RoleName,
          CAST(COALESCE(r.IsTechnician, 0) | COALESCE(r.IsAdmin, 0) AS BIT) AS IsTechnician,
-         CAST(COALESCE(r.IsAdmin, 0) AS BIT) AS IsAdmin
+         CAST(COALESCE(r.IsAdmin, 0) AS BIT) AS IsAdmin,
+         CAST(COALESCE(r.IsEventManager, 0) | COALESCE(r.IsTechnician, 0) | COALESCE(r.IsAdmin, 0) AS BIT) AS IsEventManager
   FROM dbo.Users u
   LEFT JOIN dbo.Roles r ON r.Id = u.RoleId
 `;

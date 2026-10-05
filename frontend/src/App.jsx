@@ -8,6 +8,10 @@ import TicketPage from "./pages/TicketPage.jsx";
 import People from "./pages/People.jsx";
 import Licenses from "./pages/Licenses.jsx";
 import Settings from "./pages/Settings.jsx";
+import BookEvent from "./pages/BookEvent.jsx";
+import MyBookings from "./pages/MyBookings.jsx";
+import EventBookings from "./pages/EventBookings.jsx";
+import BookingPage from "./pages/BookingPage.jsx";
 
 // The signed-in person and every pick-list, loaded once and shared.
 const AppContext = createContext(null);
@@ -73,6 +77,9 @@ export default function App() {
         <nav>
           <NavLink to="/new">Submit a request</NavLink>
           <NavLink to="/mine">My tickets</NavLink>
+          <NavLink to="/events/new">Book an event</NavLink>
+          <NavLink to="/events/mine">My bookings</NavLink>
+          {me.IsEventManager && <NavLink to="/events" end>Event bookings</NavLink>}
           {me.IsTechnician && <NavLink to="/queue">Queue</NavLink>}
           {me.IsTechnician && <NavLink to="/people">People</NavLink>}
           {me.IsTechnician && <NavLink to="/licenses">Licenses</NavLink>}
@@ -84,10 +91,14 @@ export default function App() {
       </header>
       <main className="page">
         <Routes>
-          <Route path="/" element={<Navigate to={me.IsTechnician ? "/queue" : "/mine"} replace />} />
+          <Route path="/" element={<Navigate to={me.IsTechnician ? "/queue" : me.IsEventManager ? "/events" : "/mine"} replace />} />
           <Route path="/new" element={<SubmitRequest />} />
           <Route path="/mine" element={<MyTickets />} />
           <Route path="/tickets/:id" element={<TicketPage />} />
+          <Route path="/events/new" element={<BookEvent />} />
+          <Route path="/events/mine" element={<MyBookings />} />
+          <Route path="/events/:id" element={<BookingPage />} />
+          {me.IsEventManager && <Route path="/events" element={<EventBookings />} />}
           {me.IsTechnician && <Route path="/queue" element={<Queue />} />}
           {me.IsTechnician && <Route path="/people" element={<People />} />}
           {me.IsTechnician && <Route path="/licenses" element={<Licenses />} />}

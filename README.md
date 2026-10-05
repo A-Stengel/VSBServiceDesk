@@ -8,9 +8,16 @@ final design in [docs/design.md](docs/design.md). It covers build steps 1 to
 
 - Staff sign in with their `@vsb.org` Microsoft account. Anyone else is
   refused. A person's account is created the first time they sign in.
-- Submit a request: pick the ticket type first, and the form shows the fields
-  set up for that type. Subject, Description, Priority, CC and Attachments
-  are on every type.
+- Submit a request: pick the ticket type first (Support, Access & Equipment
+  or Equipment Rental), and the form shows the fields set up for that type.
+  Access & Equipment then asks for its category (Onboarding, Access &
+  Equipment Change or Off Boarding), and shows that category's fields.
+  Subject, Description, Priority, CC and Attachments are on every type.
+- Book an event: one form for a conference room and any equipment, matching
+  the Power App's Event Booking form. HR confirms or declines the room on the
+  Event bookings page. Equipment goes to IT as a linked Equipment Rental
+  ticket. The requester can change or cancel their booking, and moving it
+  moves the equipment dates.
 - My tickets, with Active and Closed tabs.
 - The technician queue, with filters by state, technician, status, type and
   priority, and search by number, title or requester. Rows are colored by
@@ -24,10 +31,13 @@ final design in [docs/design.md](docs/design.md). It covers build steps 1 to
   the close date.
 - Equipment on tickets with costs, a double-booking warning for rentals and
   bookings, and marking items out and returned.
-- Onboarding and offboarding checklists. Ticking an item hands out or
-  collects equipment and assigns or frees a license seat.
+- Onboarding, Access & Equipment Change and Off Boarding checklists. Ticking
+  an item hands out or collects equipment and assigns or frees a license
+  seat. A change can add and remove in one ticket, and technicians can add
+  checklist lines on the ticket page.
 - The Licenses page with seats in use and the monthly and yearly spend.
-- The People page, where admins promote people to Technician or Admin, set
+- The People page, where admins promote people to Event Manager, Technician
+  or Admin, set
   departments and the departments a manager looks after, and switch people
   off.
 - The Settings page, where admins edit every list (statuses, categories,
@@ -45,6 +55,8 @@ These are the next build steps from the design:
   automatic close and the survey come next, behind the Outgoing email switch
   (Off by default).
 - The survey page.
+- Event booking emails and the VSB Events calendar. Nothing is emailed to HR
+  yet and nothing is written to the calendar. Both come with the email step.
 - The one-time import from the SharePoint lists.
 - Reports.
 
@@ -111,6 +123,11 @@ makes a change if it hasn't been made yet, so running one twice is safe.
       other ticket tables, the form fields for each ticket type, and the
       settings.
    6. `07_make_admin.sql` makes `astengel@vsb.org` the first Admin.
+   7. `08_ticket_types_and_event_booking.sql` reduces the ticket types to
+      Support, Access & Equipment and Equipment Rental, makes categories
+      belong to a ticket type, adds the Event Manager role, and creates the
+      event booking tables (`BookingStatuses`, `Rooms`, `EventBookings` and
+      `BookingEvents`). See "Ticket types and event booking" below.
 4. Leave `06_grant_function_app.sql` for Step 3.
 
 If `03_users.sql` prints a WARNING about duplicate emails, remove the
@@ -219,6 +236,33 @@ the system assigned identity automatically.
    `https://<your-static-web-app-host>/.auth/login/aad/callback`.
    If you add a custom domain later, add its callback URL too.
 
+### Ticket types and event booking (script 08)
+
+If you already ran steps 01 to 07, run only `08_ticket_types_and_event_booking.sql`.
+It is safe to run twice. In plain terms it:
+
+- Renames the Access Request type to Access & Equipment and gives it three
+  categories: Onboarding, Access & Equipment Change and Off Boarding.
+- Retires (hides) the Event Booking, Equipment Provisioning, Onboarding and
+  Offboarding types. Nothing is deleted. Test tickets of the old Onboarding,
+  Offboarding and Access Request types move to Access & Equipment with the
+  matching category. Old Event Booking and Equipment Provisioning test
+  tickets stay as they are.
+- Puts every existing category (Phone, iMIS and the rest) under Support.
+- Moves the onboarding and offboarding checklist setting from ticket types
+  to categories, and drops the `TicketTypes.ChecklistSource` column.
+- Lets form fields be set per category, and sets up the Access & Equipment
+  form fields the first time it runs.
+- Adds the Event Manager role, for HR. Event Managers handle room bookings
+  and the room list, and nothing else.
+- Creates the booking tables and the booking settings, including the VSB
+  Events calendar address (`VSBEventsCalender@vsb.org`) for later.
+- Widens `Settings.Value` to 4,000 characters for the booking guidelines.
+
+After running it, publish the API again (it won't work with the new tables
+until you do), then on the Event bookings page add your rooms and the
+guidelines, and on the People page set HR's role to Event Manager.
+
 ## Step 6. First sign-in and setup
 
 1. Open the Static Web App's URL and sign in as `astengel@vsb.org`. You see
@@ -285,6 +329,13 @@ rows.
   checklists, log tickets for other people (including adding someone who
   isn't listed), and see People and Licenses.
 - Admins also use Settings and edit people on the People page.
+- Everyone can book an event and change or cancel their own bookings.
+- Event Managers (HR) see every booking on the Event bookings page, confirm,
+  decline and change bookings, and manage the rooms and the booking
+  guidelines. They see the equipment on a booking but can't change it, and
+  they can't see tickets other than their own. Technicians and Admins can do
+  everything Event Managers can.
 
 Roles come from the Roles list. A role with Technician ticked gives
-technician access, and Admin ticked gives both.
+technician access, Admin ticked gives both, and Event Manager ticked gives
+event booking access.

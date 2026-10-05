@@ -1,4 +1,6 @@
 const { sql } = require("./db");
+const { HttpError } = require("./errors");
+const { requiredId } = require("./endpoint");
 
 // How many of each inventory item are free between two dates.
 //
@@ -51,4 +53,39 @@ async function bookingWarnings(db, items, dates) {
   return warnings;
 }
 
-module.exports = { getAvailability, bookingWarnings };
+// Reads a list of { inventoryItemId, quantity } from a request, merging
+// repeats of the same item.
+function readItems(value) {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) throw new HttpError(400, "Items must be a list");
+  const merged = new Map();
+  for (const item of value) {
+    const id = requiredId(item?.inventoryItemId, "Item");
+    const quantity = Number(item?.quantity ?? 1);
+    if (!Number.isInteger(quantity) || quantity < 1 || quantity > 1000) throw new HttpError(400, "Quantity must be a whole number from 1 to 1000");
+    merged.set(id, (merged.get(id) || 0) + quantity);
+  }
+  return [...merged].map(([inventoryItemId, quantity]) => ({ inventoryItemId, quantity }));
+}
+
+// Puts an inventory line on a ticket at today's unit cost.
+async function addTicketItem(db, ticketId, inventoryItemId, quantity) {
+  const found = await db.request().input("Id", sql.Int, inventoryItemId)
+    .query("SELECT Id, Name, UnitCost FROM dbo.InventoryItems WHERE Id = @Id AND IsActive = 1");
+  const item = found.recordset[0];
+  if (!item) throw new HttpError(400, "That inventory item doesn't exist");
+  const row = await db
+    .request()
+    .input("TicketId", sql.Int, ticketId)
+    .input("ItemId", sql.Int, inventoryItemId)
+    .input("Quantity", sql.Int, quantity)
+    .input("UnitCost", sql.Decimal(10, 2), item.UnitCost)
+    .query(`
+      INSERT INTO dbo.TicketItems (TicketId, InventoryItemId, Quantity, UnitCostAtTime)
+      OUTPUT INSERTED.Id
+      VALUES (@TicketId, @ItemId, @Quantity, @UnitCost)
+    `);
+  return { id: row.recordset[0].Id, name: item.Name };
+}
+
+module.exports = { getAvailability, bookingWarnings, readItems, addTicketItem };

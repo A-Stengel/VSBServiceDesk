@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { api, money } from "../api.js";
 import { useApp } from "../App.jsx";
 import PersonPicker from "../components/PersonPicker.jsx";
 import ItemsPicker from "../components/ItemsPicker.jsx";
 
 // One form that changes with the ticket type: pick the type first, then the
-// fields set up for that type (Settings, Form fields) appear. Subject,
-// Description, Priority, CC and Attachments are on every type.
+// fields set up for that type (Settings, Form fields) appear, plus the fields
+// of the category picked (Access & Equipment has its own per category).
+// Subject, Description, Priority, CC and Attachments are on every type.
 export default function SubmitRequest() {
   const { me, lookups } = useApp();
   const navigate = useNavigate();
@@ -22,14 +23,23 @@ export default function SubmitRequest() {
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [newPerson, setNewPerson] = useState(null);
+  const [holdings, setHoldings] = useState(null);
+  const [removals, setRemovals] = useState({ seatIds: [], ticketItemIds: [] });
 
   const type = lookups.ticketTypes.find((t) => t.Id === Number(typeId));
+  const categories = lookups.categories.filter((c) => c.TicketTypeId === Number(typeId));
+  const category = categories.find((c) => c.Id === Number(form.categoryId));
   const fields = useMemo(
-    () => lookups.ticketTypeFields.filter((f) => f.TicketTypeId === Number(typeId)),
-    [lookups, typeId]
+    () => lookups.ticketTypeFields
+      .filter((f) => f.TicketTypeId === Number(typeId) && (f.CategoryId === null || f.CategoryId === Number(form.categoryId)))
+      .sort((a, b) => a.SortOrder - b.SortOrder),
+    [lookups, typeId, form.categoryId]
   );
   const field = (key) => fields.find((f) => f.FieldKey === key);
-  const onboarding = type?.ChecklistSource === "onboarding";
+  const onboarding = category?.ChecklistSource === "onboarding";
+  const showRemovals = !!field("removals");
+  // Technicians can pick from anyone's holdings; staff only from their own
+  const canSeeHoldings = forUser && (me.IsTechnician || forUser.Id === me.Id);
   const showItems = !!field("items") || onboarding;
   const showSoftware = !!field("software") || onboarding;
   const set = (key) => (e) => setForm({ ...form, [key]: e.target.value });
@@ -44,6 +54,16 @@ export default function SubmitRequest() {
       setSoftwareIds([]);
     }
   }, [onboarding, lookups]);
+
+  // What the person holds, for "to remove"
+  useEffect(() => {
+    setRemovals({ seatIds: [], ticketItemIds: [] });
+    if (!showRemovals || !canSeeHoldings) return setHoldings(null);
+    api.holdings(forUser.Id).then(setHoldings).catch(() => setHoldings(null));
+  }, [showRemovals, canSeeHoldings, forUser]);
+
+  const toggleRemoval = (key, id, on) =>
+    setRemovals({ ...removals, [key]: on ? [...removals[key], id] : removals[key].filter((x) => x !== id) });
 
   // Free counts for the chosen dates, to warn about double-booking
   useEffect(() => {
@@ -68,6 +88,7 @@ export default function SubmitRequest() {
         items,
         softwareIds,
         forUserId: forUser?.Id,
+        removals: showRemovals ? removals : undefined,
         requesterId: requester?.Id
       };
       const result = await api.createTicket(data, files);
@@ -96,11 +117,15 @@ export default function SubmitRequest() {
 
       <label>
         What do you need?
-        <select value={typeId} onChange={(e) => setTypeId(e.target.value)} required>
+        <select value={typeId} onChange={(e) => { setTypeId(e.target.value); setForm({ ...form, categoryId: "", subcategoryId: "" }); }} required>
           <option value="">Choose a request type</option>
           {lookups.ticketTypes.map((t) => <option key={t.Id} value={t.Id}>{t.Name}</option>)}
         </select>
       </label>
+
+      {type && type.Id === lookups.defaults.bookingTicketTypeId && (
+        <p className="muted">Need a conference room as well? <Link to="/events/new">Book an event</Link> instead, and add the equipment there.</p>
+      )}
 
       {type && (
         <>
@@ -149,7 +174,7 @@ export default function SubmitRequest() {
                     {label}
                     <select value={form.categoryId || ""} onChange={(e) => setForm({ ...form, categoryId: e.target.value, subcategoryId: "" })} required={f.IsRequired}>
                       <option value="">Choose</option>
-                      {lookups.categories.map((c) => <option key={c.Id} value={c.Id}>{c.Name}</option>)}
+                      {categories.map((c) => <option key={c.Id} value={c.Id}>{c.Name}</option>)}
                     </select>
                   </label>
                 );
@@ -204,6 +229,29 @@ export default function SubmitRequest() {
               <legend>{field("items")?.Label || "Equipment"}</legend>
               <ItemsPicker inventory={lookups.inventoryItems} value={items} onChange={setItems} available={available} />
               {itemsTotal > 0 && <p className="muted">Equipment cost (tracking only): {money(itemsTotal)}</p>}
+            </fieldset>
+          )}
+
+          {showRemovals && (
+            <fieldset>
+              <legend>{field("removals").Label}</legend>
+              {!forUser && <p className="muted">Pick who it's for first.</p>}
+              {forUser && !canSeeHoldings && (
+                <p className="muted">Say what to remove in the description. IT will match it to what they hold.</p>
+              )}
+              {holdings && !holdings.seats.length && !holdings.items.length && <p className="muted">They don't hold any equipment or licenses.</p>}
+              {holdings?.items.map((i) => (
+                <label key={`i${i.Id}`} className="check">
+                  <input type="checkbox" checked={removals.ticketItemIds.includes(i.Id)} onChange={(e) => toggleRemoval("ticketItemIds", i.Id, e.target.checked)} />
+                  Collect: {i.Name}{i.Quantity > 1 ? ` (x${i.Quantity})` : ""}
+                </label>
+              ))}
+              {holdings?.seats.map((s) => (
+                <label key={`s${s.Id}`} className="check">
+                  <input type="checkbox" checked={removals.seatIds.includes(s.Id)} onChange={(e) => toggleRemoval("seatIds", s.Id, e.target.checked)} />
+                  Remove license: {s.Name}
+                </label>
+              ))}
             </fieldset>
           )}
 

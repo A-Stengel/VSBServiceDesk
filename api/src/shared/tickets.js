@@ -6,7 +6,7 @@ const personName = (alias) => `COALESCE(NULLIF(${alias}.DisplayName, ''), CONCAT
 // One ticket with the names of everything it points at.
 const TICKET_SELECT = `
   SELECT t.Id, t.TicketTypeId, tt.Name AS TicketTypeName,
-         tt.UsesDates, tt.UsesInventory, tt.UsesLicenses, tt.UsesChecklist, tt.ChecklistSource,
+         tt.UsesDates, tt.UsesInventory, tt.UsesLicenses, tt.UsesChecklist, c.ChecklistSource,
          t.StatusId, s.Name AS StatusName, s.Color AS StatusColor, s.IsClosed, s.IsWaitingOnRequester,
          t.PriorityId, p.Name AS PriorityName, p.[Rank] AS PriorityRank,
          t.CategoryId, c.Name AS CategoryName,
