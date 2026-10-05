@@ -18,6 +18,9 @@
   --ok-line: #a9d3b4;
   --ok-text: #1f5130;
   --focus: #f2b84b;
+  --ok: #2e7d4f;
+  --ring: #c39a3a;
+  --ring-soft: #e8dcc0;
   font-family: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
   font-size: 15px;
   line-height: 1.45;
@@ -47,6 +50,11 @@ button { font: inherit; }
 }
 .hbtn:hover { background: rgba(255, 255, 255, 0.1); color: #fff; }
 .brand { font-size: 17px; font-weight: 700; padding-left: 4px; }
+.brand .logo { display: block; width: auto; object-fit: contain; }
+.placeholders span { display: block; height: 32px; border-radius: 8px; background: rgba(255, 255, 255, 0.12); animation: pulse 1.6s ease-in-out infinite; }
+.placeholders .b { width: 168px; }
+.placeholders .a { width: 32px; border-radius: 50%; }
+.placeholders .n { width: 110px; height: 14px; }
 .top-actions { display: flex; align-items: center; gap: 10px; }
 .btn.submit { background: #fff; color: var(--head); border-color: #fff; display: flex; align-items: center; gap: 6px; }
 .avatar {
@@ -245,10 +253,53 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 14px; }
 }
 .dialog { width: min(640px, 94vw); max-height: 85vh; overflow-y: auto; }
 
+/* Start-up screen */
+.boot { display: flex; justify-content: center; padding-top: 56px; }
+.boot-card { width: 100%; max-width: 460px; padding: 32px 28px 26px; border-radius: 14px; text-align: center; box-shadow: 0 12px 32px rgba(15, 58, 64, 0.07); }
+.boot-card h1 { font-size: 22px; text-wrap: balance; }
+.boot-sub { margin: 0 0 22px; }
+.boot-badge { position: relative; width: 104px; height: 104px; margin: 0 auto 18px; display: grid; place-items: center; }
+.boot-badge .ring { position: absolute; inset: 0; animation: spin 1.1s linear infinite; }
+.boot-logo { display: block; width: auto; object-fit: contain; }
+.boot-dot {
+  position: absolute; right: 2px; bottom: 2px; width: 30px; height: 30px; border-radius: 50%;
+  border: 3px solid var(--card); color: #fff; display: grid; place-items: center;
+}
+.boot-badge.warn .boot-dot { background: var(--warn); }
+.boot-badge.fail .boot-dot { background: var(--error); }
+.boot-steps { list-style: none; margin: 0; padding: 0; text-align: left; border-top: 1px solid var(--line-soft); }
+.boot-steps li { display: flex; align-items: center; gap: 12px; padding: 11px 4px; border-bottom: 1px solid var(--line-soft); color: var(--muted); }
+.boot-steps .ic { flex: 0 0 22px; width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--field); display: grid; place-items: center; }
+.boot-steps li.now { color: var(--text); font-weight: 600; }
+.boot-steps li.now .ic { border-color: var(--acc); border-right-color: transparent; animation: spin 0.9s linear infinite; }
+.boot-steps li.done { color: var(--text); }
+.boot-steps li.done .ic { border-color: var(--ok); background: var(--ok); color: #fff; }
+.boot-steps li.bad { color: var(--error); font-weight: 600; }
+.boot-steps li.bad .ic { border-color: var(--error); background: var(--error); color: #fff; }
+.boot-steps .t { margin-left: auto; font-size: 13px; font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
+.boot-note { margin-top: 18px; padding: 12px 14px; border-radius: 10px; font-size: 14px; text-align: left; display: flex; gap: 10px; align-items: flex-start; }
+.boot-note svg { flex: 0 0 auto; margin-top: 2px; }
+.boot-note.slow { background: var(--acc-soft); border: 1px solid #cfe0f1; color: var(--acc-dark); }
+.boot-note.retry { background: #fdf3e7; border: 1px solid #f0cfa6; color: var(--warn); }
+.boot-bar { height: 4px; background: rgba(168, 73, 10, 0.15); border-radius: 4px; margin-top: 8px; overflow: hidden; }
+.boot-bar i { display: block; height: 100%; background: var(--warn); transition: width 1s linear; }
+.boot-actions { margin-top: 20px; display: flex; flex-direction: column; gap: 10px; align-items: center; }
+.select { color: var(--text); user-select: all; }
+.logo-preview { display: flex; gap: 20px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+.logo-preview .on-dark { background: var(--head); border-radius: 10px; padding: 10px 14px; display: flex; align-items: center; gap: 8px; color: #fff; font-weight: 700; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes pulse { 50% { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) {
+  .boot-badge .ring, .boot-steps li.now .ic, .placeholders span { animation: none; }
+}
+
 @media (max-width: 900px) {
   .split, .settings { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 520px) {
   .tiles { grid-template-columns: 1fr 1fr; }
+  .placeholders .b, .placeholders .n { display: none; }
+  .boot { padding-top: 12px; }
+  .boot-card { padding: 26px 18px 22px; }
 }
