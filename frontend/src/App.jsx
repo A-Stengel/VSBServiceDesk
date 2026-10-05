@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
-import { api } from "./api.js";
+import { api, isSignedIn } from "./api.js";
 import SubmitRequest from "./pages/SubmitRequest.jsx";
 import MyTickets from "./pages/MyTickets.jsx";
 import Queue from "./pages/Queue.jsx";
@@ -13,22 +13,56 @@ import Settings from "./pages/Settings.jsx";
 const AppContext = createContext(null);
 export const useApp = () => useContext(AppContext);
 
+const SIGN_IN_TRIED = "signInTried";
+
+// Shown when the site has no sign-in. The site never sends people to
+// Microsoft on its own, so a failed sign-in shows here instead of looping.
+function SignIn() {
+  const tried = sessionStorage.getItem(SIGN_IN_TRIED);
+  const start = () => {
+    sessionStorage.setItem(SIGN_IN_TRIED, "1");
+    window.location.href = "/.auth/login/aad?post_login_redirect_uri=" + encodeURIComponent(window.location.pathname);
+  };
+  return (
+    <div className="page">
+      <div className="card narrow">
+        <h1>VSB Service Desk</h1>
+        {tried && (
+          <p className="error">
+            Microsoft signed you in, but the site didn't finish the sign-in. Check the Static Web App&apos;s
+            AZURE_CLIENT_ID and AZURE_CLIENT_SECRET settings and the app registration (README Steps 4 and 5).
+          </p>
+        )}
+        <p>Sign in with your @vsb.org Microsoft account.</p>
+        <button className="primary" onClick={start}>Sign in</button>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [me, setMe] = useState(null);
   const [lookups, setLookups] = useState(null);
   const [error, setError] = useState("");
+  const [signedIn, setSignedIn] = useState(null);
 
   const reloadLookups = useCallback(() => api.lookups().then(setLookups), []);
 
   useEffect(() => {
-    Promise.all([api.me(), api.lookups()])
-      .then(([user, lists]) => {
-        setMe(user);
-        setLookups(lists);
-      })
-      .catch((e) => setError(e.message));
+    isSignedIn().then((yes) => {
+      setSignedIn(yes);
+      if (!yes) return;
+      sessionStorage.removeItem(SIGN_IN_TRIED);
+      Promise.all([api.me(), api.lookups()])
+        .then(([user, lists]) => {
+          setMe(user);
+          setLookups(lists);
+        })
+        .catch((e) => setError(e.message));
+    });
   }, []);
 
+  if (signedIn === false) return <SignIn />;
   if (error) return <div className="page"><p className="error">{error}</p></div>;
   if (!me || !lookups) return <div className="page"><p className="muted">Loading…</p></div>;
 
