@@ -8,12 +8,30 @@ async function request(method, path, body) {
     body: body ? (isForm ? body : JSON.stringify(body)) : undefined
   });
   if (response.status === 401) {
-    window.location.href = "/.auth/login/aad?post_login_redirect_uri=" + encodeURIComponent(window.location.pathname);
-    throw new Error("Please sign in");
+    // Only send people to Microsoft when they really aren't signed in. If the
+    // site already has a sign-in but the API still says 401, redirecting again
+    // would loop forever, so show the problem instead.
+    if (!(await isSignedIn())) {
+      window.location.href = "/.auth/login/aad?post_login_redirect_uri=" + encodeURIComponent(window.location.pathname);
+      throw new Error("Please sign in");
+    }
+    throw new Error(
+      "You're signed in, but the service desk API didn't accept the sign-in. " +
+        "Check the API is published and linked to the Static Web App (README Steps 3 and 5)."
+    );
   }
   const data = await response.json().catch(() => null);
   if (!response.ok) throw new Error(data?.error || `Request failed (${response.status})`);
   return data;
+}
+
+async function isSignedIn() {
+  try {
+    const me = await (await fetch("/.auth/me")).json();
+    return !!me?.clientPrincipal;
+  } catch {
+    return false;
+  }
 }
 
 function query(params) {
