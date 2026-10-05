@@ -8,9 +8,9 @@ export default function ItemsPicker({ inventory, value, onChange, available }) {
     const rest = value.filter((v) => v.inventoryItemId !== id);
     onChange(quantity > 0 ? [...rest, { inventoryItemId: id, quantity }] : rest);
   };
-  if (!inventory.length) return <p className="muted">No inventory items are set up yet (Settings, Inventory items).</p>;
+  if (!inventory.length) return <p className="muted">No equipment is set up yet. Technicians add it on the Inventory page.</p>;
   return (
-    <table className="grid compact">
+    <table className="tbl compact">
       <thead>
         <tr><th>Item</th><th>Cost each</th>{available && <th>Free</th>}<th>Quantity</th></tr>
       </thead>

@@ -82,16 +82,29 @@ const LOOKUPS = {
   },
   bookingStatuses: {
     table: "dbo.BookingStatuses",
-    label: "Booking statuses",
+    label: "Room statuses",
+    eventManagers: true,
     columns: [
       ...common,
       { name: "IsActiveBooking", label: "Room is in use", type: "bit", default: true },
       { name: "Color", label: "Row color", type: "string", max: 20 }
     ]
   },
-  // Managed by Event Managers on the Event bookings page (bookings.js), so it
-  // isn't on the Settings page.
-  rooms: { table: "dbo.Rooms", label: "Rooms", columns: common },
+  // Event Managers edit rooms and room statuses as well as admins
+  rooms: { table: "dbo.Rooms", label: "Rooms", eventManagers: true, columns: common },
+  // The equipment part of a rental. Stage is fixed, so only the name and
+  // color can change.
+  equipmentStatuses: {
+    table: "dbo.EquipmentStatuses",
+    label: "Equipment statuses",
+    noAdd: true,
+    columns: [
+      common[0],
+      { name: "Stage", label: "Stage", type: "string", readOnly: true },
+      common[1],
+      { name: "Color", label: "Color", type: "string", max: 20 }
+    ]
+  },
   billingPeriods: {
     table: "dbo.BillingPeriods",
     label: "Billing periods",

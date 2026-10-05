@@ -12,6 +12,10 @@ const { HttpError } = require("../shared/errors");
 const { getConnection, withTransaction, sql } = require("../shared/db");
 const { USER_SELECT } = require("../shared/auth");
 const { getSettings } = require("../shared/settings");
+const { getHoldings } = require("../shared/holdings");
+const { readItems, addTicketItem, getAvailability } = require("../shared/inventory");
+const { logChange, listChanges } = require("../shared/changelog");
+const { TICKET_SELECT, withNumber } = require("../shared/tickets");
 
 const PEOPLE_SELECT = `
   SELECT x.*, ut.Name AS UserTypeName, d.Name AS DepartmentName,
@@ -109,14 +113,106 @@ endpoint(
   }
 );
 
-// Admins change someone's role, department, the departments they manage,
-// their type, name, or switch them off.
+async function loadPerson(db, id) {
+  const result = await db.request().input("Id", sql.Int, id).query(`${PEOPLE_SELECT} WHERE x.Id = @Id`);
+  if (!result.recordset[0]) throw new HttpError(404, "Person not found");
+  return shape(result.recordset[0]);
+}
+
+// The person page: who they are, what they hold, their tickets and their
+// history.
+endpoint("getUser", { methods: ["GET"], route: "users/{id:int}", role: "technician" }, async (request) => {
+  const id = Number(request.params.id);
+  const pool = await getConnection();
+  const person = await loadPerson(pool, id);
+  const tickets = await pool.request().input("Id", sql.Int, id).query(`
+    SELECT TOP (50) * FROM (${TICKET_SELECT} WHERE t.RequesterId = @Id OR t.ForUserId = @Id) x
+    ORDER BY x.IsClosed, x.CreatedAt DESC
+  `);
+  return {
+    jsonBody: {
+      person,
+      holdings: await getHoldings(pool, id),
+      tickets: tickets.recordset.map(({ Description, ...t }) => withNumber(t)),
+      history: await listChanges(pool, { area: "person", entityId: id, top: 50 })
+    }
+  };
+});
+
+// Technicians hand something straight to a person from their page.
+// Body: { inventoryItemId, quantity } or { softwareId }
 endpoint(
-  "updateUser",
-  { methods: ["PATCH"], route: "users/{id:int}", role: "admin", failMessage: "Could not save the person" },
+  "assignHolding",
+  { methods: ["POST"], route: "users/{id:int}/holdings", role: "technician", failMessage: "Could not assign it" },
   async (request, context, me) => {
     const id = Number(request.params.id);
     const body = await readJson(request);
+    await withTransaction(async (tx) => {
+      const person = await loadPerson(tx, id);
+      if (!person.IsActive) throw new HttpError(400, "This account is off. Start onboarding to bring them back first.");
+      let summary;
+      if (body.softwareId) {
+        const softwareId = optionalId(body.softwareId, "Software");
+        const seat = await tx.request().input("UserId", sql.Int, id).input("SoftwareId", sql.Int, softwareId).query(`
+          INSERT INTO dbo.LicenseAssignments (UserId, SoftwareId, CostPerSeatAtTime)
+          OUTPUT INSERTED.Id
+          SELECT @UserId, Id, CostPerSeat FROM dbo.Software WHERE Id = @SoftwareId AND IsActive = 1
+        `);
+        if (!seat.recordset.length) throw new HttpError(400, "That software doesn't exist");
+        const name = await tx.request().input("Id", sql.Int, softwareId).query("SELECT Name FROM dbo.Software WHERE Id = @Id");
+        summary = `Assigned a ${name.recordset[0].Name} seat`;
+      } else {
+        const [item] = readItems([body]);
+        const free = (await getAvailability(tx)).find((a) => a.Id === item.inventoryItemId);
+        if (free && free.Available < item.quantity) throw new HttpError(400, `Only ${Math.max(free.Available, 0)} ${free.Name} available`);
+        const added = await addTicketItem(tx, null, item.inventoryItemId, item.quantity, id);
+        summary = `Handed out ${added.name}${item.quantity > 1 ? ` (x${item.quantity})` : ""}`;
+      }
+      await logChange(tx, { area: "person", entityId: id, actorId: me.Id, summary });
+    });
+    return { status: 201, jsonBody: { ok: true } };
+  }
+);
+
+// Body: { ticketItemId } (equipment comes back) or { seatId } (seat removed)
+endpoint(
+  "returnHolding",
+  { methods: ["POST"], route: "users/{id:int}/holdings/return", role: "technician", failMessage: "Could not save it" },
+  async (request, context, me) => {
+    const id = Number(request.params.id);
+    const body = await readJson(request);
+    await withTransaction(async (tx) => {
+      const holdings = await getHoldings(tx, id);
+      let summary;
+      if (body.seatId) {
+        const seat = holdings.seats.find((s) => s.Id === Number(body.seatId));
+        if (!seat) throw new HttpError(400, "They don't hold that seat any more");
+        await tx.request().input("Id", sql.Int, seat.Id).query("UPDATE dbo.LicenseAssignments SET RemovedAt = SYSUTCDATETIME() WHERE Id = @Id");
+        summary = `Removed their ${seat.Name} seat`;
+      } else {
+        const item = holdings.items.find((i) => i.Id === Number(body.ticketItemId));
+        if (!item) throw new HttpError(400, "They don't hold that item any more");
+        await tx.request().input("Id", sql.Int, item.Id).query("UPDATE dbo.TicketItems SET ReturnedAt = SYSUTCDATETIME() WHERE Id = @Id");
+        summary = `${item.Name}${item.Quantity > 1 ? ` (x${item.Quantity})` : ""} returned`;
+      }
+      await logChange(tx, { area: "person", entityId: id, actorId: me.Id, summary });
+    });
+    return { jsonBody: { ok: true } };
+  }
+);
+
+// Technicians set someone's department. Admins also change their role (staff
+// accounts only), the departments they manage, their type and name. An
+// account is turned off and on by closing an Off Boarding or Onboarding
+// ticket, not here.
+endpoint(
+  "updateUser",
+  { methods: ["PATCH"], route: "users/{id:int}", role: "technician", failMessage: "Could not save the person" },
+  async (request, context, me) => {
+    const id = Number(request.params.id);
+    const body = await readJson(request);
+    const adminOnly = ["roleId", "userTypeId", "firstName", "lastName", "displayName", "isActive", "managedDepartmentIds"];
+    if (!me.IsAdmin && adminOnly.some((key) => key in body)) throw new HttpError(403, "Only admins can change that");
     const sets = [];
     const inputs = [];
     const add = (column, type, value) => {
@@ -139,8 +235,13 @@ endpoint(
       managed = [...new Set(body.managedDepartmentIds.map((d) => optionalId(d, "Department")).filter(Boolean))];
     }
 
+    const settings = await getSettings();
     try {
       await withTransaction(async (tx) => {
+        const before = await loadPerson(tx, id);
+        if ("roleId" in body && before.UserTypeId !== settings.StaffUserTypeId) {
+          throw new HttpError(400, "Only staff accounts can have a role. Outside people and shared mailboxes use email only.");
+        }
         if (sets.length) {
           const req = tx.request().input("Id", sql.Int, id);
           inputs.forEach(([column, type, value]) => req.input(column, type, value));
@@ -157,14 +258,28 @@ endpoint(
               .query("INSERT INTO dbo.DepartmentManagers (UserId, DepartmentId) VALUES (@Id, @DepartmentId)");
           }
         }
+        const after = await loadPerson(tx, id);
+        const names = async (ids) => {
+          if (!ids.length) return "none";
+          const rows = await tx.request().query(`SELECT Name FROM dbo.Departments WHERE Id IN (${ids.map(Number).join(",")}) ORDER BY Name`);
+          return rows.recordset.map((r) => r.Name).join(", ");
+        };
+        const notes = [];
+        if (before.RoleName !== after.RoleName) notes.push(`Role: ${before.RoleName || "none"} to ${after.RoleName || "none"}`);
+        if (before.DepartmentName !== after.DepartmentName) notes.push(`Department: ${before.DepartmentName || "none"} to ${after.DepartmentName || "none"}`);
+        if (before.UserTypeName !== after.UserTypeName) notes.push(`Account type: ${before.UserTypeName} to ${after.UserTypeName}`);
+        if (before.DisplayName !== after.DisplayName) notes.push(`Name: ${before.DisplayName} to ${after.DisplayName}`);
+        if (before.IsActive !== after.IsActive) notes.push(after.IsActive ? "Account turned on" : "Account turned off");
+        const sameManaged = before.ManagedDepartmentIds.length === after.ManagedDepartmentIds.length &&
+          before.ManagedDepartmentIds.every((d) => after.ManagedDepartmentIds.includes(d));
+        if (!sameManaged) notes.push(`Manager of: ${await names(after.ManagedDepartmentIds)}`);
+        for (const summary of notes) await logChange(tx, { area: "person", entityId: id, actorId: me.Id, summary });
       });
     } catch (error) {
       if (isForeignKeyViolation(error)) throw new HttpError(400, "That role, department or user type doesn't exist");
       throw error;
     }
     const pool = await getConnection();
-    const updated = await pool.request().input("Id", sql.Int, id).query(`${PEOPLE_SELECT} WHERE x.Id = @Id`);
-    if (!updated.recordset[0]) throw new HttpError(404, "Person not found");
-    return { jsonBody: shape(updated.recordset[0]) };
+    return { jsonBody: await loadPerson(pool, id) };
   }
 );

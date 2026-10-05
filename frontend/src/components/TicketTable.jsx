@@ -1,41 +1,48 @@
 import { Link } from "react-router-dom";
 import { formatDate } from "../api.js";
+import { SortTh } from "./ListView.jsx";
 
-// The ticket list, with the same columns as the current desk.
-export default function TicketTable({ tickets, showAssignee = true }) {
-  if (!tickets.length) return <p className="muted">No tickets here.</p>;
+// The ticket list, with sortable headers (the list's useListView decides the
+// order).
+export default function TicketTable({ tickets, list, technician }) {
+  if (!tickets.length) return <p className="empty">No tickets here.</p>;
   return (
-    <table className="grid">
-      <thead>
-        <tr>
-          <th>#</th>
-          <th>Title</th>
-          <th>Type</th>
-          {showAssignee && <th>Assigned To</th>}
-          <th>Category</th>
-          <th>Requester</th>
-          <th>Status</th>
-          <th>Priority</th>
-          <th>Created</th>
-          <th>Department</th>
-        </tr>
-      </thead>
-      <tbody>
-        {tickets.map((t) => (
-          <tr key={t.Id} style={{ background: t.StatusColor || undefined }}>
-            <td><Link to={`/tickets/${t.Id}`}>{t.Number}</Link></td>
-            <td><Link to={`/tickets/${t.Id}`}>{t.Subject}</Link></td>
-            <td>{t.TicketTypeName}</td>
-            {showAssignee && <td>{t.TechnicianName || <span className="muted">Unassigned</span>}</td>}
-            <td>{[t.CategoryName, t.SubcategoryName].filter(Boolean).join(" / ")}</td>
-            <td>{t.RequesterName}</td>
-            <td>{t.StatusName}</td>
-            <td>{t.PriorityName}</td>
-            <td>{formatDate(t.CreatedAt)}</td>
-            <td>{t.DepartmentName}</td>
+    <div className="card flush scroll">
+      <table className="tbl" style={{ minWidth: 900 }}>
+        <thead>
+          <tr>
+            <SortTh list={list} col="number">#</SortTh>
+            <SortTh list={list} col="subject">Title</SortTh>
+            <SortTh list={list} col="type">Type</SortTh>
+            <SortTh list={list} col="assigned">Assigned to</SortTh>
+            <SortTh list={list} col="requester">Requester</SortTh>
+            <SortTh list={list} col="status">Status</SortTh>
+            <SortTh list={list} col="priority">Priority</SortTh>
+            <SortTh list={list} col="created">Created</SortTh>
+            {technician && <SortTh list={list} col="department">Department</SortTh>}
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {tickets.map((t) => (
+            <tr key={t.Id}>
+              <td><Link to={`/tickets/${t.Id}`}>{t.Number}</Link></td>
+              <td>
+                <Link to={`/tickets/${t.Id}`} className="link">{t.Subject}</Link>
+                {(t.CategoryName || t.ForUserName || t.ForPersonName) && (
+                  <div className="muted small">{[t.CategoryName, t.SubcategoryName, t.ForUserName || t.ForPersonName].filter(Boolean).join(" · ")}</div>
+                )}
+              </td>
+              <td>{t.TicketTypeName}</td>
+              <td>{t.TechnicianName || <span className="muted">Unassigned</span>}</td>
+              <td>{t.RequesterName}</td>
+              <td><span className="pill" style={{ background: t.StatusColor || undefined }}>{t.StatusName}</span></td>
+              <td>{t.PriorityName}</td>
+              <td className="small">{formatDate(t.CreatedAt)}</td>
+              {technician && <td>{t.DepartmentName}</td>}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }

@@ -1,0 +1,28 @@
+const { sql } = require("./db");
+
+// What a person holds now: every license seat they have and every item
+// handed to them to keep that hasn't come back (on a ticket for them, or
+// handed straight to them from their page).
+async function getHoldings(db, personId) {
+  const seats = await db.request().input("UserId", sql.Int, personId).query(`
+    SELECT la.Id, s.Name, la.SoftwareId, la.AssignedAt, la.AssignedTicketId
+    FROM dbo.LicenseAssignments la
+    JOIN dbo.Software s ON s.Id = la.SoftwareId
+    WHERE la.UserId = @UserId AND la.RemovedAt IS NULL
+    ORDER BY s.Name
+  `);
+  const items = await db.request().input("UserId", sql.Int, personId).query(`
+    SELECT ti.Id, ti.Quantity, i.Name, ti.InventoryItemId, ti.TicketId, ti.OutAt
+    FROM dbo.TicketItems ti
+    LEFT JOIN dbo.Tickets t ON t.Id = ti.TicketId
+    JOIN dbo.InventoryItems i ON i.Id = ti.InventoryItemId
+    WHERE ti.ReturnedAt IS NULL AND ti.OutAt IS NOT NULL
+      AND (ti.HolderId = @UserId
+           OR (ti.TicketId IS NOT NULL AND ti.HolderId IS NULL AND t.EndDate IS NULL
+               AND (t.ForUserId = @UserId OR (t.ForUserId IS NULL AND t.RequesterId = @UserId))))
+    ORDER BY i.Name
+  `);
+  return { seats: seats.recordset, items: items.recordset };
+}
+
+module.exports = { getHoldings };

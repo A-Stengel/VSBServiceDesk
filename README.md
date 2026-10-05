@@ -13,15 +13,17 @@ final design in [docs/design.md](docs/design.md). It covers build steps 1 to
   Access & Equipment then asks for its category (Onboarding, Access &
   Equipment Change or Off Boarding), and shows that category's fields.
   Subject, Description, Priority, CC and Attachments are on every type.
-- Book an event: one form for a conference room and any equipment, matching
-  the Power App's Event Booking form. HR confirms or declines the room on the
-  Event bookings page. Equipment goes to IT as a linked Equipment Rental
-  ticket. The requester can change or cancel their booking, and moving it
-  moves the equipment dates.
-- My tickets, with Active and Closed tabs.
-- The technician queue, with filters by state, technician, status, type and
-  priority, and search by number, title or requester. Rows are colored by
-  status.
+- A home page: Create new buttons for each ticket type, a few counts, and
+  the five latest things that happened. Technicians, admins and Event
+  Managers get Go to and Manage requests sections at the top.
+- One Equipment Rental / Event Booking form: equipment, a room, or both (the
+  room is optional). HR confirms or declines the room on the record's own
+  page, which has its own history. Equipment goes to IT as a linked
+  Equipment Rental ticket. Event Managers never see equipment. The requester
+  can change or cancel, and moving the dates moves the equipment dates.
+- The Tickets, Rentals & Events and People lists all have tabs, search,
+  filters, sortable columns and saved views. Admins can share a ticket view
+  with the team, where it shows as a "Team:" tab.
 - The ticket page: the conversation, replies, technician notes (hidden from
   the requester), attachments, the side panel for status, technician,
   priority, type, category and the rest, Move to Closure, and the history of
@@ -35,14 +37,21 @@ final design in [docs/design.md](docs/design.md). It covers build steps 1 to
   an item hands out or collects equipment and assigns or frees a license
   seat. A change can add and remove in one ticket, and technicians can add
   checklist lines on the ticket page.
-- The Licenses page with seats in use and the monthly and yearly spend.
-- The People page, where admins promote people to Event Manager, Technician
-  or Admin, set
-  departments and the departments a manager looks after, and switch people
-  off.
-- The Settings page, where admins edit every list (statuses, categories,
-  inventory items, software, holidays and the rest), the form fields for each
-  ticket type, and the general settings.
+- The Inventory page, with Equipment and Licenses: on-hand counts with − and
+  +, costs, the monthly license spend, adding an item with its quantity and
+  cost, deleting an item once nothing is out, and a change history. Any
+  technician can edit it.
+- The People page and a page per person: what they hold (with Mark
+  returned, Remove seat and Assign), their tickets, their change history,
+  and buttons that open the request form filled in for a change, off
+  boarding or onboarding. Closing an Off Boarding ticket turns the account
+  off and closing an Onboarding ticket turns it back on. Admins set roles;
+  any technician can set a department.
+- The Settings page (the gear in the header), grouped by area, where admins
+  edit every list, the form fields for each ticket type, email templates,
+  notification addresses, the low-stock warning, shared views and the
+  general settings. Every section keeps its own change history. Event
+  Managers see only Rooms, Booking guidelines and Room statuses.
 - New ticket numbers start at 0010000.
 
 ## Not in this MVP yet
@@ -263,11 +272,28 @@ After running it, publish the API again (it won't work with the new tables
 until you do), then on the Event bookings page add your rooms and the
 guidelines, and on the People page set HR's role to Event Manager.
 
+### Visual overhaul (script 09)
+
+If you already ran steps 01 to 08, run only `09_visual_overhaul.sql`. It is
+safe to run twice. In plain terms it:
+
+- Adds the `SavedViews` table for saved and shared list views.
+- Adds the `ChangeLog` table for the change history on Settings, Inventory
+  and each person.
+- Adds the `EquipmentStatuses` list (Requested, Checked out, Returned).
+- Lets equipment be handed straight to a person without a ticket
+  (`TicketItems.HolderId`), and lets inventory items and software be deleted
+  without losing their history (`IsDeleted`).
+- Adds settings for the HR email addresses, the low-stock warning and the
+  six email templates.
+
+After running it, publish the API again.
+
 ## Step 6. First sign-in and setup
 
 1. Open the Static Web App's URL and sign in as `astengel@vsb.org`. You see
-   the Queue, People, Licenses and Settings pages because Step 1 made you an
-   Admin.
+   every tile on the home page and the Settings gear because Step 1 made you
+   an Admin.
 2. In Settings, Lists:
    - Add your subcategories under each category.
    - Add the year's holidays.
@@ -327,14 +353,14 @@ rows.
 - Technicians also see the queue, every ticket, technician notes and
   history. They edit ticket fields, assign tickets, add equipment, work
   checklists, log tickets for other people (including adding someone who
-  isn't listed), and see People and Licenses.
-- Admins also use Settings and edit people on the People page.
+  isn't listed), and use the People and Inventory pages.
+- Admins also use Settings, set people's roles and share saved views.
 - Everyone can book an event and change or cancel their own bookings.
 - Event Managers (HR) see every booking on the Event bookings page, confirm,
   decline and change bookings, and manage the rooms and the booking
-  guidelines. They see the equipment on a booking but can't change it, and
-  they can't see tickets other than their own. Technicians and Admins can do
-  everything Event Managers can.
+  guidelines. They don't see any equipment, and they can't see tickets
+  other than their own. Technicians and Admins can do everything Event
+  Managers can.
 
 Roles come from the Roles list. A role with Technician ticked gives
 technician access, Admin ticked gives both, and Event Manager ticked gives

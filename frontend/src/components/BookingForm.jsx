@@ -19,7 +19,10 @@ export const emptyBooking = {
 // The event booking form, matching the Power App's Event Booking form. Used
 // to book and to change a booking. "canChangeItems" is false for Event
 // Managers, who handle the room but not the equipment.
-export default function BookingForm({ initial, submitLabel, onSubmit, onCancel, canChangeItems = true, excludeTicketId }) {
+//
+// With roomOptional (a new request), "No room needed" makes it an equipment
+// rental only; onSubmit then gets roomId null.
+export default function BookingForm({ initial, submitLabel, onSubmit, onCancel, canChangeItems = true, excludeTicketId, roomOptional = false, showGuidelinesButton = true }) {
   const { lookups } = useApp();
   const [form, setForm] = useState(initial || emptyBooking);
   const [available, setAvailable] = useState(null);
@@ -49,9 +52,13 @@ export default function BookingForm({ initial, submitLabel, onSubmit, onCancel, 
       setError("The end time must be after the start time.");
       return;
     }
+    if (roomOptional && !form.roomId && !form.items.length) {
+      setError("Pick a room, some equipment, or both.");
+      return;
+    }
     setSaving(true);
     try {
-      const data = { ...form, roomId: Number(form.roomId), attendeeCount: Number(form.attendeeCount) };
+      const data = { ...form, roomId: form.roomId ? Number(form.roomId) : null, attendeeCount: Number(form.attendeeCount || 0) };
       if (!canChangeItems) delete data.items;
       await onSubmit(data);
     } catch (err) {
@@ -70,8 +77,8 @@ export default function BookingForm({ initial, submitLabel, onSubmit, onCancel, 
   return (
     <form className="form" onSubmit={submit}>
       <div className="row spread">
-        <span className="muted">Fields marked * are required.</span>
-        <button type="button" onClick={() => setShowGuidelines(true)}>Guidelines</button>
+        <span className="muted small">Fields marked * are required.</span>
+        {showGuidelinesButton && <button type="button" className="btn sm" onClick={() => setShowGuidelines(true)}>Guidelines</button>}
       </div>
 
       <label>
@@ -92,36 +99,41 @@ export default function BookingForm({ initial, submitLabel, onSubmit, onCancel, 
 
       <div className="row">
         <label className="grow">
-          Location *
-          <select value={form.roomId} onChange={set("roomId")} required>
-            <option value="">Select room</option>
+          {roomOptional ? "Room" : "Location *"}
+          <select value={form.roomId} onChange={set("roomId")} required={!roomOptional}>
+            <option value="">{roomOptional ? "No room needed" : "Select room"}</option>
             {rooms.map((r) => <option key={r.Id} value={r.Id}>{r.Name}</option>)}
           </select>
         </label>
-        <label>
-          Attendee Count *
-          <input type="number" min="0" max="10000" value={form.attendeeCount} onChange={set("attendeeCount")}
-            placeholder="Expected number of attendees" required />
-        </label>
+        {form.roomId && (
+          <label>
+            Attendee Count *
+            <input type="number" min="0" max="10000" value={form.attendeeCount} onChange={set("attendeeCount")}
+              placeholder="Expected number of attendees" required />
+          </label>
+        )}
       </div>
-      {!lookups.rooms.length && <p className="muted">No rooms are set up yet. An event manager adds them on the Event bookings page.</p>}
+      {!lookups.rooms.length && <p className="muted small">No rooms are set up yet. An event manager adds them in Settings, Rooms.</p>}
+      {roomOptional && form.roomId && <p className="muted small" style={{ margin: 0 }}>HR confirms or declines the room.</p>}
 
-      <fieldset>
-        <legend>Refreshments, FOIA and lunch *</legend>
-        {toggle("refreshments", "Refreshments")}
-        {toggle("foia", "FOIA")}
-        {toggle("lunchCatered", "Will Lunch Be Catered?")}
-      </fieldset>
+      {form.roomId && (
+        <fieldset>
+          <legend>Refreshments, FOIA and lunch *</legend>
+          {toggle("refreshments", "Refreshments")}
+          {toggle("foia", "FOIA")}
+          {toggle("lunchCatered", "Will Lunch Be Catered?")}
+        </fieldset>
+      )}
 
       <fieldset>
         <legend>Items to Checkout</legend>
         {canChangeItems ? (
           <>
             <ItemsPicker inventory={lookups.inventoryItems} value={form.items} onChange={(items) => setForm({ ...form, items })} available={available} />
-            <p className="muted">Picking any equipment sends a request to IT, linked to this booking.</p>
+            <p className="muted small">{roomOptional ? "Optional. IT checks the equipment out to you and marks it returned." : "Picking any equipment sends a request to IT, linked to this booking."}</p>
           </>
         ) : (
-          <p className="muted">Only the person who booked it or IT can change the equipment.</p>
+          <p className="muted small">Only the person who booked it or IT can change the equipment.</p>
         )}
       </fieldset>
 
@@ -132,8 +144,8 @@ export default function BookingForm({ initial, submitLabel, onSubmit, onCancel, 
 
       {error && <p className="error">{error}</p>}
       <div className="row">
-        <button type="submit" className="primary" disabled={saving}>{saving ? "Saving…" : submitLabel}</button>
-        {onCancel && <button type="button" onClick={onCancel}>Cancel</button>}
+        <button type="submit" className="btn pri" disabled={saving}>{saving ? "Saving…" : submitLabel}</button>
+        {onCancel && <button type="button" className="btn" onClick={onCancel}>Cancel</button>}
       </div>
 
       {showGuidelines && (
@@ -141,7 +153,7 @@ export default function BookingForm({ initial, submitLabel, onSubmit, onCancel, 
           <div className="card dialog" onClick={(e) => e.stopPropagation()}>
             <h2>Guidelines</h2>
             <div className="body">{lookups.eventGuidelines || "No guidelines have been written yet."}</div>
-            <button type="button" onClick={() => setShowGuidelines(false)}>Close</button>
+            <button type="button" className="btn" onClick={() => setShowGuidelines(false)}>Close</button>
           </div>
         </div>
       )}

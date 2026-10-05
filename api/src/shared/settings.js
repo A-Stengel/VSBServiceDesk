@@ -1,5 +1,17 @@
 const { getConnection, sql } = require("./db");
 
+// The automatic emails, each stored as a subject and a message setting.
+// Placeholders: [Requester], [TicketNumber], [Subject], [Link], [DaysLeft],
+// [Room], [When].
+const TEMPLATES = [
+  { key: "Received", label: "Ticket received" },
+  { key: "Warning", label: "Waiting on you" },
+  { key: "Closed", label: "Ticket closed" },
+  { key: "Survey", label: "Satisfaction survey" },
+  { key: "BookingConfirmed", label: "Booking confirmed" },
+  { key: "BookingDeclined", label: "Booking declined" }
+];
+
 // Every row in dbo.Settings the app knows about, how to edit it, and what it means.
 // "lookup" settings store the Id of a row in that lookup table.
 const SETTINGS_META = [
@@ -26,7 +38,13 @@ const SETTINGS_META = [
   { key: "BookingCancelledStatusId", label: "Status when a booking is cancelled", type: "lookup", lookup: "bookingStatuses" },
   { key: "BookingTicketTypeId", label: "Ticket type for a booking's equipment", type: "lookup", lookup: "ticketTypes" },
   { key: "EventsCalendarAddress", label: "Events calendar address", type: "text" },
-  { key: "EventGuidelines", label: "Event booking guidelines", type: "longtext" }
+  { key: "EventGuidelines", label: "Event booking guidelines", type: "longtext" },
+  { key: "HREmails", label: "HR notification emails (comma separated)", type: "text" },
+  { key: "LowStockThreshold", label: "Warn when this many or fewer are available", type: "number" },
+  ...TEMPLATES.flatMap((t) => [
+    { key: `Template${t.key}Subject`, label: `${t.label}: subject`, type: "text", template: t.key },
+    { key: `Template${t.key}Body`, label: `${t.label}: message`, type: "longtext", template: t.key }
+  ])
 ];
 
 let cache;
@@ -65,4 +83,4 @@ async function saveSettings(values) {
   cache = undefined;
 }
 
-module.exports = { SETTINGS_META, getSettings, saveSettings };
+module.exports = { SETTINGS_META, TEMPLATES, getSettings, saveSettings };

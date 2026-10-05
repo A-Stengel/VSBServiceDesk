@@ -1,180 +1,393 @@
-import { useEffect, useState } from "react";
-import { api } from "../api.js";
+import { useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
+import { api, formatDate } from "../api.js";
 import { useApp } from "../App.jsx";
 
-const LISTS = [
-  ["statuses", "Statuses"],
-  ["priorities", "Priorities"],
-  ["categories", "Categories"],
-  ["subcategories", "Subcategories"],
-  ["sources", "Sources"],
-  ["ticketTypes", "Ticket types"],
-  ["departments", "Departments"],
-  ["holidays", "Holidays"],
-  ["inventoryItems", "Inventory items"],
-  ["software", "Software"],
-  ["billingPeriods", "Billing periods"],
-  ["bookingStatuses", "Booking statuses"],
-  ["roles", "Roles"],
-  ["userTypes", "User types"]
+// Settings, grouped down the left. Lists can be added to, renamed,
+// reordered and turned off or on, never deleted, because old tickets point
+// at them. Every section keeps its own change history. Event Managers see
+// only Rooms, Booking guidelines and Room statuses.
+
+const SECTIONS = [
+  { group: "Tickets" },
+  { key: "ticketTypes", label: "Ticket types", table: "ticketTypes" },
+  { key: "accessKinds", label: "Access & Equipment kinds", history: "categories" },
+  { key: "formFields", label: "Form fields", history: "formFields" },
+  { key: "categories", label: "Categories", history: "categories,subcategories" },
+  { key: "statuses", label: "Statuses", table: "statuses" },
+  { key: "priorities", label: "Priorities", table: "priorities" },
+  { key: "sources", label: "Sources", table: "sources" },
+  { group: "Rentals & Events" },
+  { key: "rooms", label: "Rooms", table: "rooms", eventManagers: true },
+  { key: "guidelines", label: "Booking guidelines", history: "guidelines", eventManagers: true },
+  { key: "bookingStatuses", label: "Room statuses", table: "bookingStatuses", eventManagers: true },
+  { key: "equipmentStatuses", label: "Equipment statuses", table: "equipmentStatuses" },
+  { group: "Organization" },
+  { key: "departments", label: "Departments", table: "departments" },
+  { key: "holidays", label: "Holidays", table: "holidays" },
+  { group: "Email" },
+  { key: "emailTimers", label: "Email and timers", history: "general" },
+  { key: "notifications", label: "Notifications", history: "notifications" },
+  { key: "templates", label: "Email templates", history: "templates" },
+  { group: "Inventory and team" },
+  { key: "onboarding", label: "Onboarding defaults", history: "inventoryItems,software" },
+  { key: "lowStock", label: "Low-stock warning", history: "lowStock" },
+  { key: "sharedViews", label: "Shared views" },
+  { group: "System" },
+  { key: "roles", label: "Roles", table: "roles" },
+  { key: "userTypes", label: "Account types", table: "userTypes" },
+  { key: "billingPeriods", label: "Billing periods", table: "billingPeriods" },
+  { key: "advanced", label: "Other settings", history: "general" }
 ];
 
-// Admin settings: every pick-list, the per-type form fields, and the general
-// settings (status rules, email switch, business days).
+const DESCRIPTIONS = {
+  ticketTypes: "The kinds of request on the Submit a request page. Equipment Rental opens the combined rental and event form.",
+  accessKinds: "The choices for \"What kind of request?\" on Access & Equipment. The checklist decides what the ticket lists: onboarding defaults, a change, or everything the person holds.",
+  categories: "Categories for each ticket type, and the subcategories under each.",
+  statuses: "Ticket statuses. \"Counts as closed\" and \"Waiting on requester\" drive the lists and the business day timers.",
+  priorities: "Rank 1 is the most urgent.",
+  sources: "How a ticket came in.",
+  rooms: "Rooms people can book. Turned off rooms stay on old bookings.",
+  bookingStatuses: "The room part of a rental or event. \"Room is in use\" keeps it in the overlap check.",
+  equipmentStatuses: "The names shown for the equipment part. The app works out the stage from the items, so these can be renamed but not added.",
+  departments: "Where staff work. Each person has one department; managers can look after several.",
+  holidays: "Skipped when counting business days for the warning and automatic close.",
+  roles: "What someone can do comes from the Technician, Admin and Event manager ticks.",
+  userTypes: "Staff sign in; outside people and shared mailboxes only email in.",
+  billingPeriods: "How often a license is billed, for the monthly cost on the Inventory page."
+};
+
 export default function Settings() {
-  const [tab, setTab] = useState("lists");
+  const { roles } = useApp();
+  const [params, setParams] = useSearchParams();
+  const visible = SECTIONS.filter((s) => roles.admin || s.eventManagers || (s.group && SECTIONS.some((x) => x.eventManagers && groupOf(x) === s.group)));
+  const items = visible.filter((s) => s.key);
+  const current = items.find((s) => s.key === params.get("section")) || items[0];
+  const [refresh, setRefresh] = useState(0);
+  const changed = useCallback(() => setRefresh((n) => n + 1), []);
+
   return (
-    <div className="card">
+    <>
       <h1>Settings</h1>
-      <div className="tabs">
-        <button className={tab === "lists" ? "active" : ""} onClick={() => setTab("lists")}>Lists</button>
-        <button className={tab === "fields" ? "active" : ""} onClick={() => setTab("fields")}>Form fields</button>
-        <button className={tab === "general" ? "active" : ""} onClick={() => setTab("general")}>General</button>
+      <div className="settings" style={{ marginTop: 16 }}>
+        <nav className="card side-nav" aria-label="Settings sections">
+          {visible.map((s) => s.group
+            ? <div key={s.group} className="group">{s.group}</div>
+            : (
+              <button key={s.key} className={current.key === s.key ? "on" : ""} aria-current={current.key === s.key ? "page" : undefined}
+                onClick={() => setParams({ section: s.key }, { replace: true })}>
+                {s.label}
+              </button>
+            ))}
+        </nav>
+        <div className="stack">
+          <div className="card">
+            <h2>{current.label}</h2>
+            {DESCRIPTIONS[current.key] && <p className="muted small" style={{ marginTop: -4 }}>{DESCRIPTIONS[current.key]}</p>}
+            <Section key={current.key} section={current} onChange={changed} />
+          </div>
+          {(current.table || current.history) && <History key={`${current.key}-${refresh}`} section={current.history || current.table} />}
+        </div>
       </div>
-      {tab === "lists" && <Lists />}
-      {tab === "fields" && <FormFields />}
-      {tab === "general" && <General />}
-    </div>
+    </>
   );
 }
 
-function Lists() {
-  const [table, setTable] = useState("statuses");
+function groupOf(section) {
+  let group = null;
+  for (const s of SECTIONS) {
+    if (s.group) group = s.group;
+    if (s === section) return group;
+  }
+  return group;
+}
+
+function Section({ section, onChange }) {
+  const { lookups } = useApp();
+  const accessType = lookups.ticketTypes.find((t) => t.Name === "Access & Equipment");
+  switch (section.key) {
+    case "accessKinds":
+      return accessType
+        ? <LookupList table="categories" fixed={{ TicketTypeId: accessType.Id }} filter={(r) => r.TicketTypeId === accessType.Id} hide={["TicketTypeId"]} onChange={onChange} />
+        : <p className="muted">There is no Access & Equipment ticket type.</p>;
+    case "categories":
+      return <Categories onChange={onChange} />;
+    case "formFields":
+      return <FormFields onChange={onChange} />;
+    case "guidelines":
+      return <Guidelines onChange={onChange} />;
+    case "emailTimers":
+      return <SettingsForm keys={["EmailSwitch", "RequesterReplyStatusId", "WarningBusinessDays", "CloseBusinessDays"]} onChange={onChange}
+        note="Outgoing email stays Off until you're ready. Sending email and the business day timers come in the email step of the build; these settings are ready for it." />;
+    case "notifications":
+      return <SettingsForm keys={["ITTeamEmails", "HREmails"]} onChange={onChange}
+        note="IT gets an email for every new ticket; HR for every room request. Nothing is sent until email is built and switched on." />;
+    case "templates":
+      return <Templates onChange={onChange} />;
+    case "onboarding":
+      return <OnboardingDefaults onChange={onChange} />;
+    case "lowStock":
+      return <SettingsForm keys={["LowStockThreshold"]} onChange={onChange} note="On the Inventory page, Available turns orange at or below this number." />;
+    case "sharedViews":
+      return <SharedViews />;
+    case "advanced":
+      return <SettingsForm exclude onChange={onChange} />;
+    default:
+      return <LookupList table={section.table} onChange={onChange} />;
+  }
+}
+
+function History({ section }) {
+  const [rows, setRows] = useState(null);
+  useEffect(() => {
+    api.settingsHistory(section).then(setRows).catch(() => setRows([]));
+  }, [section]);
   return (
-    <div className="settings-lists">
-      <ul className="side-menu">
-        {LISTS.map(([key, label]) => (
-          <li key={key}>
-            <button className={table === key ? "active" : ""} onClick={() => setTable(key)}>{label}</button>
+    <div className="card">
+      <h3>Change history</h3>
+      {rows && !rows.length && <p className="muted small" style={{ margin: 0 }}>No changes yet.</p>}
+      <ul className="history">
+        {(rows || []).map((h) => (
+          <li key={h.Id}>
+            <span className="muted small">{formatDate(h.At)} · {h.ActorName}</span>
+            <br />{h.Summary}
           </li>
         ))}
       </ul>
-      <LookupEditor key={table} table={table} />
     </div>
   );
 }
 
-function blankRow(columns) {
+// ---------------------------------------------------------------------------
+// A list: add, edit (rename and the other columns), reorder, turn off or on
+// ---------------------------------------------------------------------------
+
+function blankRow(columns, fixed) {
   const row = {};
-  for (const c of columns) row[c.name] = c.type === "bit" ? c.default ?? false : "";
-  return row;
+  for (const c of columns) {
+    if (c.readOnly) continue;
+    row[c.name] = c.type === "bit" ? c.default ?? false : "";
+  }
+  return { ...row, ...fixed };
 }
 
-function LookupEditor({ table }) {
-  const { lookups, reloadLookups } = useApp();
+function FieldInput({ column, value, onChange }) {
+  const { lookups } = useApp();
+  switch (column.type) {
+    case "bit":
+      return <input type="checkbox" checked={!!value} onChange={(e) => onChange(e.target.checked)} />;
+    case "int":
+    case "decimal":
+      return <input type="number" step={column.type === "decimal" ? "0.01" : "1"} value={value ?? ""} onChange={(e) => onChange(e.target.value)} />;
+    case "date":
+      return <input type="date" value={value ? String(value).slice(0, 10) : ""} onChange={(e) => onChange(e.target.value)} />;
+    case "ref":
+      return (
+        <select value={value ?? ""} onChange={(e) => onChange(e.target.value)}>
+          <option value="">Choose</option>
+          {(lookups[column.ref] || []).map((o) => <option key={o.Id} value={o.Id}>{o.Name}</option>)}
+        </select>
+      );
+    case "choice":
+      return (
+        <select value={value ?? ""} onChange={(e) => onChange(e.target.value || null)}>
+          <option value="">None</option>
+          {column.choices.map((c) => <option key={c} value={c}>{c}</option>)}
+        </select>
+      );
+    default:
+      return <input value={value ?? ""} maxLength={column.max} onChange={(e) => onChange(e.target.value)} />;
+  }
+}
+
+function LookupList({ table, fixed = {}, filter = () => true, hide = [], onChange, title }) {
+  const { reloadLookups, notify } = useApp();
   const [data, setData] = useState(null);
-  const [edits, setEdits] = useState({});
-  const [newRow, setNewRow] = useState(null);
+  const [editing, setEditing] = useState(null);
+  const [adding, setAdding] = useState(null);
   const [error, setError] = useState("");
 
-  const load = () => api.adminLookup(table).then((d) => {
-    setData(d);
-    setNewRow(blankRow(d.columns));
-    setEdits({});
-  }).catch((e) => setError(e.message));
+  const load = useCallback(() => api.adminLookup(table).then(setData).catch((e) => setError(e.message)), [table]);
   useEffect(() => {
     load();
-    // eslint-disable-next-line
-  }, [table]);
+  }, [load]);
+
+  async function run(promise, message) {
+    try {
+      await promise;
+      if (message) notify(message);
+      await Promise.all([load(), reloadLookups()]);
+      onChange();
+      return true;
+    } catch (err) {
+      notify(err.message, true);
+      return false;
+    }
+  }
 
   if (error) return <p className="error">{error}</p>;
   if (!data) return <p className="muted">Loading…</p>;
+  const rows = data.rows.filter(filter);
+  const sortable = data.columns.some((c) => c.name === "SortOrder");
+  const canToggle = data.columns.some((c) => c.name === "IsActive");
+  const noAdd = table === "equipmentStatuses";
+  const extra = data.columns.filter((c) => !["Name", "SortOrder", "IsActive", ...hide].includes(c.name));
+  const nameOf = (r) => r.Name || (r.HolidayDate ? String(r.HolidayDate).slice(0, 10) : "");
 
-  const valueOf = (row) => ({ ...row, ...(edits[row.Id] || {}) });
-  const change = (row, name, value) => setEdits({ ...edits, [row.Id]: { ...(edits[row.Id] || {}), [name]: value } });
-
-  async function saveRow(row) {
-    try {
-      await api.adminUpdateLookup(table, row.Id, edits[row.Id]);
-      await reloadLookups();
-      load();
-    } catch (err) {
-      alert(err.message);
-    }
-  }
-  async function addRow() {
-    try {
-      await api.adminCreateLookup(table, newRow);
-      await reloadLookups();
-      load();
-    } catch (err) {
-      alert(err.message);
-    }
+  async function move(index, step) {
+    const order = [...rows];
+    const [row] = order.splice(index, 1);
+    order.splice(index + step, 0, row);
+    const updates = order.map((r, i) => ({ r, sort: (i + 1) * 10 })).filter(({ r, sort }) => r.SortOrder !== sort);
+    // Only the moved row goes in the history
+    await run(Promise.all(updates.map(({ r, sort }) => api.adminUpdateLookup(table, r.Id, { SortOrder: sort }, r.Id !== row.Id))));
   }
 
-  const input = (column, value, onChange) => {
-    switch (column.type) {
-      case "bit":
-        return <input type="checkbox" checked={!!value} onChange={(e) => onChange(e.target.checked)} />;
-      case "int":
-      case "decimal":
-        return <input type="number" step={column.type === "decimal" ? "0.01" : "1"} className="qty" value={value ?? ""} onChange={(e) => onChange(e.target.value)} />;
-      case "date":
-        return <input type="date" value={value ? String(value).slice(0, 10) : ""} onChange={(e) => onChange(e.target.value)} />;
-      case "ref":
-        return (
-          <select value={value ?? ""} onChange={(e) => onChange(e.target.value)}>
-            <option value="">Choose</option>
-            {(lookups[column.ref] || []).map((o) => <option key={o.Id} value={o.Id}>{o.Name}</option>)}
-          </select>
-        );
-      case "choice":
-        return (
-          <select value={value ?? ""} onChange={(e) => onChange(e.target.value || null)}>
-            <option value="">None</option>
-            {column.choices.map((c) => <option key={c} value={c}>{c}</option>)}
-          </select>
-        );
-      default:
-        return <input value={value ?? ""} maxLength={column.max} onChange={(e) => onChange(e.target.value)} />;
+  async function saveEdit(e) {
+    e.preventDefault();
+    const { Id, ...values } = editing;
+    const changes = {};
+    for (const c of data.columns) {
+      if (c.readOnly || hide.includes(c.name) || c.name === "IsActive" || c.name === "SortOrder") continue;
+      changes[c.name] = values[c.name];
     }
-  };
+    if (await run(api.adminUpdateLookup(table, Id, changes), "Saved.")) setEditing(null);
+  }
+
+  async function add(e) {
+    e.preventDefault();
+    const sortOrder = sortable ? Math.max(0, ...data.rows.map((r) => r.SortOrder || 0)) + 10 : undefined;
+    const body = { ...adding, ...fixed };
+    if (sortable) body.SortOrder = sortOrder;
+    if (await run(api.adminCreateLookup(table, body), `Added ${body.Name || body.HolidayDate}.`)) setAdding(null);
+  }
 
   return (
-    <div className="grow">
-      <h2>{data.label}</h2>
-      <p className="muted">Entries can't be deleted, because old tickets point at them. Untick Active to hide one from the forms.</p>
-      <table className="grid compact">
-        <thead>
-          <tr>{data.columns.map((c) => <th key={c.name}>{c.label}</th>)}<th /></tr>
-        </thead>
-        <tbody>
-          {data.rows.map((row) => {
-            const v = valueOf(row);
-            return (
-              <tr key={row.Id}>
-                {data.columns.map((c) => <td key={c.name}>{input(c, v[c.name], (value) => change(row, c.name, value))}</td>)}
-                <td>{edits[row.Id] && <button onClick={() => saveRow(row)}>Save</button>}</td>
-              </tr>
-            );
-          })}
-          <tr className="new-row">
-            {data.columns.map((c) => <td key={c.name}>{input(c, newRow[c.name], (value) => setNewRow({ ...newRow, [c.name]: value }))}</td>)}
-            <td><button onClick={addRow}>Add</button></td>
-          </tr>
-        </tbody>
-      </table>
+    <div>
+      {title && <h3>{title}</h3>}
+      <div className="list-rows">
+        {!rows.length && <p className="muted small">Nothing here yet.</p>}
+        {rows.map((r, i) => (
+          <div key={r.Id}>
+            <div className={`lr ${canToggle && !r.IsActive ? "off" : ""}`}>
+              <span className="name">
+                {nameOf(r)}
+                {r.HolidayDate && r.Name && <span className="muted small"> · {r.Name}</span>}
+                {extra.filter((c) => c.type !== "bit" && c.name !== "HolidayDate" && r[c.name] !== null && r[c.name] !== "" && c.type !== "ref").map((c) => (
+                  <span key={c.name} className="muted small"> · {c.label}: {String(r[c.name])}</span>
+                ))}
+                {extra.filter((c) => c.type === "bit" && r[c.name]).map((c) => <span key={c.name} className="pill" style={{ marginLeft: 6 }}>{c.label}</span>)}
+              </span>
+              {sortable && (
+                <>
+                  <button className="btn sm" aria-label={`Move ${nameOf(r)} up`} disabled={i === 0} onClick={() => move(i, -1)}>▲</button>
+                  <button className="btn sm" aria-label={`Move ${nameOf(r)} down`} disabled={i === rows.length - 1} onClick={() => move(i, 1)}>▼</button>
+                </>
+              )}
+              <button className="btn sm" onClick={() => setEditing(editing?.Id === r.Id ? null : { ...r })}>Edit</button>
+              {canToggle && table !== "equipmentStatuses" && (
+                <button className="btn sm" onClick={() => run(api.adminUpdateLookup(table, r.Id, { IsActive: !r.IsActive }), `${r.IsActive ? "Turned off" : "Turned on"} ${nameOf(r)}.`)}>
+                  {r.IsActive ? "Turn off" : "Turn on"}
+                </button>
+              )}
+            </div>
+            {editing?.Id === r.Id && (
+              <form className="card form" style={{ margin: "4px 0 12px", background: "#fafbf9" }} onSubmit={saveEdit}>
+                <div className="row">
+                  {data.columns.filter((c) => !c.readOnly && !hide.includes(c.name) && c.name !== "IsActive" && c.name !== "SortOrder").map((c) => (
+                    <label key={c.name} className={c.type === "bit" ? "check" : ""}>
+                      {c.type === "bit" ? null : c.label}
+                      <FieldInput column={c} value={editing[c.name]} onChange={(v) => setEditing({ ...editing, [c.name]: v })} />
+                      {c.type === "bit" ? c.label : null}
+                    </label>
+                  ))}
+                </div>
+                <div className="row">
+                  <button className="btn pri sm">Save</button>
+                  <button type="button" className="btn sm ghost" onClick={() => setEditing(null)}>Cancel</button>
+                </div>
+              </form>
+            )}
+          </div>
+        ))}
+      </div>
+      {!noAdd && !adding && (
+        <button className="btn sm" style={{ marginTop: 12 }} onClick={() => setAdding(blankRow(data.columns.filter((c) => !hide.includes(c.name) && c.name !== "SortOrder"), {}))}>
+          Add
+        </button>
+      )}
+      {adding && (
+        <form className="card form" style={{ marginTop: 12, background: "#fafbf9" }} onSubmit={add}>
+          <div className="row">
+            {data.columns.filter((c) => !c.readOnly && !hide.includes(c.name) && c.name !== "SortOrder" && c.name !== "IsActive" && !(c.name in fixed)).map((c) => (
+              <label key={c.name} className={c.type === "bit" ? "check" : ""}>
+                {c.type === "bit" ? null : c.label}
+                <FieldInput column={c} value={adding[c.name]} onChange={(v) => setAdding({ ...adding, [c.name]: v })} />
+                {c.type === "bit" ? c.label : null}
+              </label>
+            ))}
+          </div>
+          <div className="row">
+            <button className="btn pri sm">Add</button>
+            <button type="button" className="btn sm ghost" onClick={() => setAdding(null)}>Cancel</button>
+          </div>
+        </form>
+      )}
     </div>
   );
 }
 
+// Categories by ticket type, each with its subcategories.
+function Categories({ onChange }) {
+  const { lookups } = useApp();
+  const types = lookups.ticketTypes.filter((t) => t.Name !== "Access & Equipment");
+  const [typeId, setTypeId] = useState(types[0]?.Id);
+  const [categoryId, setCategoryId] = useState("");
+  const categories = lookups.categories.filter((c) => c.TicketTypeId === typeId);
+  return (
+    <div className="stack">
+      <div className="tabs" role="tablist" style={{ marginTop: 0 }}>
+        {types.map((t) => (
+          <button key={t.Id} role="tab" aria-selected={t.Id === typeId} className={`tab ${t.Id === typeId ? "on" : ""}`}
+            onClick={() => { setTypeId(t.Id); setCategoryId(""); }}>{t.Name}</button>
+        ))}
+      </div>
+      <LookupList key={`c${typeId}`} table="categories" fixed={{ TicketTypeId: typeId }} filter={(r) => r.TicketTypeId === typeId}
+        hide={["TicketTypeId", "ChecklistSource"]} onChange={onChange} />
+      <label className="field" style={{ maxWidth: 360 }}>
+        Subcategories of
+        <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
+          <option value="">Pick a category</option>
+          {categories.map((c) => <option key={c.Id} value={c.Id}>{c.Name}</option>)}
+        </select>
+      </label>
+      {categoryId && (
+        <LookupList key={`s${categoryId}`} table="subcategories" fixed={{ CategoryId: Number(categoryId) }}
+          filter={(r) => r.CategoryId === Number(categoryId)} hide={["CategoryId"]} onChange={onChange} />
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Form fields: a tab per ticket type, Shown and Required for each field
+// ---------------------------------------------------------------------------
+
 const FIELD_OPTIONS = [
-  ["category", "Category"],
+  ["category", "Category (or \"What kind of request?\")"],
   ["subcategory", "Subcategory"],
   ["startDate", "Start date"],
   ["endDate", "End date"],
   ["items", "Equipment items"],
-  ["forUser", "Who is it for? (a person)"],
+  ["forUser", "Person this is for"],
   ["software", "Software licenses"],
   ["newHire", "New hire name and department"],
-  ["removals", "Equipment or software to remove (from what the person holds)"]
+  ["removals", "Equipment or software to remove"]
 ];
-
-// Category and Subcategory are set for the whole ticket type
 const TYPE_ONLY = ["category", "subcategory"];
 
-function FormFields() {
-  const { lookups, reloadLookups } = useApp();
+function FormFields({ onChange }) {
+  const { lookups, reloadLookups, notify } = useApp();
   const [typeId, setTypeId] = useState(lookups.ticketTypes[0]?.Id || "");
   const [categoryId, setCategoryId] = useState("");
   const [fields, setFields] = useState([]);
@@ -191,7 +404,7 @@ function FormFields() {
 
   const toggle = (key, label, on) =>
     setFields(on
-      ? [...fields, { fieldKey: key, label, isRequired: false, sortOrder: (fields.length + 1) * 10 }]
+      ? [...fields, { fieldKey: key, label: label.replace(/ \(.*\)$/, ""), isRequired: false, sortOrder: (fields.length + 1) * 10 }]
       : fields.filter((f) => f.fieldKey !== key));
   const update = (key, changes) => setFields(fields.map((f) => (f.fieldKey === key ? { ...f, ...changes } : f)));
 
@@ -199,85 +412,105 @@ function FormFields() {
     try {
       await api.saveTicketTypeFields(typeId, categoryId || undefined, fields.map((f) => ({ ...f, sortOrder: Number(f.sortOrder) || 0 })));
       await reloadLookups();
-      alert("Saved");
+      notify("Form fields saved.");
+      onChange();
     } catch (err) {
-      alert(err.message);
+      notify(err.message, true);
     }
   }
 
   return (
     <div className="form">
-      <p className="muted">
-        Subject, Description, Priority, CC and Attachments are on every form. Pick the extra fields each ticket type shows,
-        and any extra fields shown only when a category is picked.
-      </p>
-      <div className="row">
-        <label>
-          Ticket type
-          <select value={typeId} onChange={(e) => { setTypeId(e.target.value); setCategoryId(""); }}>
-            {lookups.ticketTypes.map((t) => <option key={t.Id} value={t.Id}>{t.Name}</option>)}
-          </select>
-        </label>
-        <label>
+      <div className="tabs" role="tablist" style={{ marginTop: 0 }}>
+        {lookups.ticketTypes.map((t) => (
+          <button key={t.Id} role="tab" aria-selected={t.Id === Number(typeId)} className={`tab ${t.Id === Number(typeId) ? "on" : ""}`}
+            onClick={() => { setTypeId(t.Id); setCategoryId(""); }}>{t.Name}</button>
+        ))}
+      </div>
+      {categories.length > 0 && (
+        <label style={{ maxWidth: 420 }}>
           Fields for
           <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
             <option value="">The whole ticket type</option>
-            {categories.map((c) => <option key={c.Id} value={c.Id}>Only the {c.Name} category</option>)}
+            {categories.map((c) => <option key={c.Id} value={c.Id}>Only when {c.Name} is picked</option>)}
           </select>
         </label>
+      )}
+      <div className="scroll">
+        <table className="tbl compact">
+          <thead><tr><th>Field</th><th>Shown</th><th>Required</th><th>Label on the form</th><th>Order</th></tr></thead>
+          <tbody>
+            <tr><td>Subject</td><td><input type="checkbox" checked disabled /></td><td><input type="checkbox" checked disabled /></td><td className="muted small">Always on</td><td /></tr>
+            <tr><td>Description</td><td><input type="checkbox" checked disabled /></td><td><input type="checkbox" checked disabled /></td><td className="muted small">Always on</td><td /></tr>
+            {options.map(([key, name]) => {
+              const f = fields.find((x) => x.fieldKey === key);
+              return (
+                <tr key={key}>
+                  <td>{name}</td>
+                  <td><input type="checkbox" aria-label={`Show ${name}`} checked={!!f} onChange={(e) => toggle(key, name, e.target.checked)} /></td>
+                  <td>{f && <input type="checkbox" aria-label={`${name} required`} checked={f.isRequired} onChange={(e) => update(key, { isRequired: e.target.checked })} />}</td>
+                  <td>{f && <input value={f.label} maxLength={100} aria-label={`${name} label`} onChange={(e) => update(key, { label: e.target.value })} />}</td>
+                  <td>{f && <input type="number" className="qty" aria-label={`${name} order`} value={f.sortOrder} onChange={(e) => update(key, { sortOrder: e.target.value })} />}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </div>
-      <table className="grid compact">
-        <thead><tr><th>Show</th><th>Field</th><th>Label on the form</th><th>Required</th><th>Order</th></tr></thead>
-        <tbody>
-          {options.map(([key, name]) => {
-            const f = fields.find((x) => x.fieldKey === key);
-            return (
-              <tr key={key}>
-                <td><input type="checkbox" checked={!!f} onChange={(e) => toggle(key, name, e.target.checked)} /></td>
-                <td>{name}</td>
-                <td>{f && <input value={f.label} maxLength={100} onChange={(e) => update(key, { label: e.target.value })} />}</td>
-                <td>{f && <input type="checkbox" checked={f.isRequired} onChange={(e) => update(key, { isRequired: e.target.checked })} />}</td>
-                <td>{f && <input type="number" className="qty" value={f.sortOrder} onChange={(e) => update(key, { sortOrder: e.target.value })} />}</td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-      <button className="primary" onClick={save}>Save form fields</button>
+      <p className="muted small" style={{ margin: 0 }}>Priority, CC and Attachments are on every form.</p>
+      <div><button className="btn pri" onClick={save}>Save form fields</button></div>
     </div>
   );
 }
 
-function General() {
-  const { lookups } = useApp();
+// ---------------------------------------------------------------------------
+// Text settings
+// ---------------------------------------------------------------------------
+
+function useSettings() {
   const [data, setData] = useState(null);
-  const [values, setValues] = useState({});
   const [error, setError] = useState("");
-
   useEffect(() => {
-    api.settings().then((d) => {
-      setData(d);
-      setValues(d.values);
-    }).catch((e) => setError(e.message));
+    api.settings().then(setData).catch((e) => setError(e.message));
   }, []);
+  return { data, setData, error };
+}
 
-  async function save() {
+const SECTION_KEYS = ["EmailSwitch", "RequesterReplyStatusId", "WarningBusinessDays", "CloseBusinessDays", "ITTeamEmails", "HREmails", "LowStockThreshold", "EventGuidelines"];
+
+// keys: the settings to show. exclude: everything not shown in another
+// section (Other settings).
+function SettingsForm({ keys, exclude, note, onChange }) {
+  const { lookups, reloadLookups, notify } = useApp();
+  const { data, setData, error } = useSettings();
+  const [values, setValues] = useState(null);
+  useEffect(() => {
+    if (data) setValues(data.values);
+  }, [data]);
+
+  if (error) return <p className="error">{error}</p>;
+  if (!data || !values) return <p className="muted">Loading…</p>;
+  const metas = data.meta.filter((m) => (exclude ? !SECTION_KEYS.includes(m.key) && !m.template : keys.includes(m.key)));
+
+  async function save(e) {
+    e.preventDefault();
+    const body = {};
+    for (const m of metas) body[m.key] = values[m.key];
     try {
-      const d = await api.saveSettings(values);
-      setValues(d.values);
-      alert("Saved");
+      setData(await api.saveSettings(body));
+      await reloadLookups();
+      notify("Settings saved.");
+      onChange();
     } catch (err) {
-      alert(err.message);
+      notify(err.message, true);
     }
   }
 
-  if (error) return <p className="error">{error}</p>;
-  if (!data) return <p className="muted">Loading…</p>;
   return (
-    <div className="form narrow">
-      {data.meta.map((m) => (
+    <form className="form" style={{ maxWidth: 560 }} onSubmit={save}>
+      {metas.map((m) => (
         <label key={m.key}>
-          {m.label}
+          {m.key === "RequesterReplyStatusId" ? "Status set when the requester replies" : m.label}
           {m.type === "lookup" && (
             <select value={values[m.key] ?? ""} onChange={(e) => setValues({ ...values, [m.key]: e.target.value })}>
               <option value="">None</option>
@@ -292,18 +525,160 @@ function General() {
           {m.type === "number" && (
             <input type="number" min="0" value={values[m.key] ?? ""} onChange={(e) => setValues({ ...values, [m.key]: e.target.value })} />
           )}
-          {m.type === "text" && (
-            <input value={values[m.key] ?? ""} onChange={(e) => setValues({ ...values, [m.key]: e.target.value })} />
-          )}
+          {m.type === "text" && <input value={values[m.key] ?? ""} onChange={(e) => setValues({ ...values, [m.key]: e.target.value })} />}
           {m.type === "longtext" && (
             <textarea rows={5} maxLength={4000} value={values[m.key] ?? ""} onChange={(e) => setValues({ ...values, [m.key]: e.target.value })} />
           )}
         </label>
       ))}
-      <p className="muted">
-        Outgoing email stays Off until you're ready. The email and timer jobs that use these settings come in the next build step.
+      {note && <p className="muted small" style={{ margin: 0 }}>{note}</p>}
+      <div><button className="btn pri">Save</button></div>
+    </form>
+  );
+}
+
+const PLACEHOLDERS = "[Requester], [TicketNumber], [Subject], [Link], [DaysLeft], [Room], [When]";
+
+function Templates({ onChange }) {
+  const { notify } = useApp();
+  const { data, setData, error } = useSettings();
+  const [pick, setPick] = useState("Received");
+  const [draft, setDraft] = useState(null);
+
+  useEffect(() => {
+    if (data) setDraft({ subject: data.values[`Template${pick}Subject`] || "", body: data.values[`Template${pick}Body`] || "" });
+  }, [data, pick]);
+
+  if (error) return <p className="error">{error}</p>;
+  if (!data || !draft) return <p className="muted">Loading…</p>;
+  const templates = data.meta.filter((m) => m.template && m.key.endsWith("Subject"));
+
+  async function save(e) {
+    e.preventDefault();
+    try {
+      setData(await api.saveSettings({ [`Template${pick}Subject`]: draft.subject, [`Template${pick}Body`]: draft.body }));
+      notify("Template saved.");
+      onChange();
+    } catch (err) {
+      notify(err.message, true);
+    }
+  }
+
+  return (
+    <form className="form" onSubmit={save}>
+      <label style={{ maxWidth: 360 }}>
+        Email
+        <select value={pick} onChange={(e) => setPick(e.target.value)}>
+          {templates.map((m) => <option key={m.template} value={m.template}>{m.label.replace(/: subject$/, "")}</option>)}
+        </select>
+      </label>
+      <label>Subject<input value={draft.subject} maxLength={1000} onChange={(e) => setDraft({ ...draft, subject: e.target.value })} /></label>
+      <label>Message<textarea rows={8} maxLength={4000} value={draft.body} onChange={(e) => setDraft({ ...draft, body: e.target.value })} /></label>
+      <p className="muted small" style={{ margin: 0 }}>Placeholders: {PLACEHOLDERS}. Nothing is emailed until email is built and switched on.</p>
+      <div><button className="btn pri">Save template</button></div>
+    </form>
+  );
+}
+
+function Guidelines({ onChange }) {
+  const { lookups, reloadLookups, notify } = useApp();
+  const [text, setText] = useState(lookups.eventGuidelines || "");
+  async function save(e) {
+    e.preventDefault();
+    try {
+      await api.saveGuidelines(text);
+      await reloadLookups();
+      notify("Guidelines saved.");
+      onChange();
+    } catch (err) {
+      notify(err.message, true);
+    }
+  }
+  return (
+    <form className="form" onSubmit={save}>
+      <p className="muted small" style={{ margin: 0 }}>Shown next to the Equipment Rental / Event Booking form.</p>
+      <textarea rows={10} value={text} maxLength={4000} onChange={(e) => setText(e.target.value)} aria-label="Booking guidelines" />
+      <div><button className="btn pri">Save guidelines</button></div>
+    </form>
+  );
+}
+
+// The equipment and licenses ticked on every new Onboarding request.
+function OnboardingDefaults({ onChange }) {
+  const { lookups, reloadLookups, notify } = useApp();
+  async function toggle(table, row, on) {
+    try {
+      await api.adminUpdateLookup(table, row.Id, { IsDefaultForOnboarding: on });
+      await reloadLookups();
+      notify(`${row.Name} ${on ? "added to" : "removed from"} the onboarding defaults.`);
+      onChange();
+    } catch (err) {
+      notify(err.message, true);
+    }
+  }
+  return (
+    <div className="stack">
+      <p className="muted small" style={{ margin: 0 }}>Ticked on every new Onboarding request. The technician can still change them on the form.</p>
+      <fieldset>
+        <legend>Equipment</legend>
+        {!lookups.inventoryItems.length && <span className="muted small">No equipment yet. Add it on the Inventory page.</span>}
+        <div className="checks">
+          {lookups.inventoryItems.map((i) => (
+            <label key={i.Id} className="check">
+              <input type="checkbox" checked={!!i.IsDefaultForOnboarding} onChange={(e) => toggle("inventoryItems", i, e.target.checked)} />
+              {i.Name}
+            </label>
+          ))}
+        </div>
+      </fieldset>
+      <fieldset>
+        <legend>Software licenses</legend>
+        {!lookups.software.length && <span className="muted small">No licenses yet. Add them on the Inventory page.</span>}
+        <div className="checks">
+          {lookups.software.map((s) => (
+            <label key={s.Id} className="check">
+              <input type="checkbox" checked={!!s.IsDefaultForOnboarding} onChange={(e) => toggle("software", s, e.target.checked)} />
+              {s.Name}
+            </label>
+          ))}
+        </div>
+      </fieldset>
+    </div>
+  );
+}
+
+function SharedViews() {
+  const { notify } = useApp();
+  const [views, setViews] = useState(null);
+  const load = useCallback(() => api.sharedViews().then(setViews).catch((e) => notify(e.message, true)), [notify]);
+  useEffect(() => {
+    load();
+  }, [load]);
+  async function remove(view) {
+    if (!confirm(`Stop sharing "${view.Name}" with the team? It's deleted for everyone.`)) return;
+    try {
+      await api.deleteView(view.Id);
+      notify(`Deleted the team view ${view.Name}.`);
+      load();
+    } catch (err) {
+      notify(err.message, true);
+    }
+  }
+  if (!views) return <p className="muted">Loading…</p>;
+  return (
+    <div>
+      <p className="muted small" style={{ marginTop: 0 }}>
+        Ticket views an admin saved with &quot;Share with the whole team&quot;. They show as Team: tabs on every technician&apos;s ticket list.
       </p>
-      <button className="primary" onClick={save}>Save settings</button>
+      {!views.length && <p className="muted small">No shared views yet. Save one from the ticket list.</p>}
+      <div className="list-rows">
+        {views.map((v) => (
+          <div key={v.Id} className="lr">
+            <span className="name">Team: {v.Name} <span className="muted small">· by {v.OwnerName}, {formatDate(v.CreatedAt)}</span></span>
+            <button className="btn sm danger" onClick={() => remove(v)}>Delete</button>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

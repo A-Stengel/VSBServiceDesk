@@ -17,15 +17,19 @@ const { getSettings } = require("../shared/settings");
 const { USER_SELECT } = require("../shared/auth");
 const { uploadFile } = require("../shared/storage");
 const { getAvailability, bookingWarnings, readItems, addTicketItem } = require("../shared/inventory");
+const { getHoldings } = require("../shared/holdings");
+const { logChange } = require("../shared/changelog");
 const {
   TICKET_SELECT,
   personName,
+  formatNumber,
   withNumber,
   loadTicket,
   loadVisibleTicket,
   getStatus,
   statusTimingSql,
-  recordEvents
+  recordEvents,
+  accountOnClose
 } = require("../shared/tickets");
 
 // ---------------------------------------------------------------------------
@@ -94,28 +98,6 @@ async function softwareNames(db, ids) {
     names.set(id, row.Name);
   }
   return names;
-}
-
-// What a person holds now: every license seat they have and every item
-// handed to them to keep that hasn't come back.
-async function getHoldings(db, personId) {
-  const seats = await db.request().input("UserId", sql.Int, personId).query(`
-    SELECT la.Id, s.Name
-    FROM dbo.LicenseAssignments la
-    JOIN dbo.Software s ON s.Id = la.SoftwareId
-    WHERE la.UserId = @UserId AND la.RemovedAt IS NULL
-    ORDER BY s.Name
-  `);
-  const items = await db.request().input("UserId", sql.Int, personId).query(`
-    SELECT ti.Id, ti.Quantity, i.Name, ti.InventoryItemId
-    FROM dbo.TicketItems ti
-    JOIN dbo.Tickets t ON t.Id = ti.TicketId
-    JOIN dbo.InventoryItems i ON i.Id = ti.InventoryItemId
-    WHERE ti.ReturnedAt IS NULL AND ti.OutAt IS NOT NULL AND t.EndDate IS NULL
-      AND (t.ForUserId = @UserId OR (t.ForUserId IS NULL AND t.RequesterId = @UserId))
-    ORDER BY i.Name
-  `);
-  return { seats: seats.recordset, items: items.recordset };
 }
 
 const removeSeatLabel = (seat) => `Remove license: ${seat.Name}`;
@@ -273,7 +255,11 @@ endpoint(
     const startDate = shown("startDate") ? need("startDate", optionalDate(data.startDate, "Start date")) : null;
     const endDate = shown("endDate") ? need("endDate", optionalDate(data.endDate, "End date")) : null;
     if (startDate && endDate && endDate < startDate) throw new HttpError(400, "The end date is before the start date");
-    const forUserId = shown("forUser") ? need("forUser", optionalId(data.forUserId, "Person")) : null;
+    // Onboarding someone who already has an account (coming back after off
+    // boarding) links the ticket to them, so closing it turns the account on.
+    const rehire = checklistSource === "onboarding" && user.IsTechnician && !shown("forUser");
+    const forUserId = shown("forUser") ? need("forUser", optionalId(data.forUserId, "Person"))
+      : rehire ? optionalId(data.forUserId, "Person") : null;
     const forPersonName = shown("newHire") ? need("newHire", optionalText(data.newHireName, "New hire", 200)) : null;
     const forDepartmentId = shown("newHire") ? optionalId(data.newHireDepartmentId, "Department") : null;
 
@@ -366,6 +352,14 @@ endpoint(
 
         await saveAttachments(tx, id, null, files, user.Id);
         await recordEvents(tx, id, user.Id, [{ field: "Created", oldValue: null, newValue: type.Name }]);
+        if (forUserId) {
+          await logChange(tx, {
+            area: "person",
+            entityId: forUserId,
+            actorId: user.Id,
+            summary: `Request ${formatNumber(id)} started: ${category?.Name || type.Name}`
+          });
+        }
         return id;
       });
     } catch (error) {
@@ -493,6 +487,7 @@ endpoint(
     const settings = await getSettings();
     const id = Number(request.params.id);
 
+    const warnings = [];
     await withTransaction(async (tx) => {
       const ticket = await loadTicket(tx, id);
       if (!ticket) throw new HttpError(404, "Ticket not found");
@@ -543,11 +538,12 @@ endpoint(
         });
       }
       await recordEvents(tx, id, user.Id, events);
+      if (changes.StatusId) await accountOnClose(tx, ticket, await getStatus(tx, changes.StatusId.value), user.Id, warnings);
     });
 
     // The survey email on close comes with the email step of the build.
     const pool = await getConnection();
-    return { jsonBody: { ticket: withNumber(await loadTicket(pool, id)) } };
+    return { jsonBody: { ticket: withNumber(await loadTicket(pool, id)), warnings } };
   }
 );
 

@@ -1,139 +1,102 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { api } from "../api.js";
 import { useApp } from "../App.jsx";
+import { ListTabs, ListToolbar, SortTh, useListView } from "../components/ListView.jsx";
 
 // Everyone in the user list: staff, outside people and shared mailboxes.
-// Admins set roles (promote to Technician or Admin), departments and the
-// departments a manager looks after.
+// Outside people and shared mailboxes only email in, so their role shows as
+// "Email only". Open a person to see what they hold and start a request.
+export function roleLabel(person, lookups) {
+  return person.UserTypeId !== lookups.defaults.staffUserTypeId ? "Email only" : person.RoleName || "None";
+}
+
 export default function People() {
-  const { me, lookups } = useApp();
-  const [search, setSearch] = useState("");
-  const [includeInactive, setIncludeInactive] = useState(false);
+  const { lookups } = useApp();
   const [people, setPeople] = useState(null);
-  const [roles, setRoles] = useState([]);
-  const [editing, setEditing] = useState(null);
   const [error, setError] = useState("");
 
-  const load = () => api.users({ search, includeInactive: includeInactive ? 1 : "" }).then(setPeople).catch((e) => setError(e.message));
   useEffect(() => {
-    const timer = setTimeout(load, 250);
-    return () => clearTimeout(timer);
-  }, [search, includeInactive]);
-  useEffect(() => setRoles(lookups.roles), [lookups]);
+    api.users({ includeInactive: 1 }).then(setPeople).catch((e) => setError(e.message));
+  }, []);
 
-  async function save() {
-    try {
-      const changes = {
-        firstName: editing.FirstName,
-        lastName: editing.LastName,
-        displayName: editing.DisplayName,
-        roleId: editing.RoleId,
-        departmentId: editing.DepartmentId || null,
-        userTypeId: editing.UserTypeId,
-        isActive: editing.IsActive,
-        managedDepartmentIds: editing.ManagedDepartmentIds
-      };
-      if (editing.Id === me.Id) {
-        delete changes.roleId; // you can't demote or switch off yourself
-        delete changes.isActive;
-      }
-      await api.updateUser(editing.Id, changes);
-      setEditing(null);
-      load();
-    } catch (err) {
-      alert(err.message);
-    }
-  }
+  const tabs = useMemo(() => [
+    { key: "active", label: "Active", test: (p) => p.IsActive },
+    { key: "all", label: "Everyone" },
+    { key: "off", label: "Off boarded", test: (p) => !p.IsActive }
+  ], []);
+
+  const filters = useMemo(() => [
+    {
+      key: "role",
+      label: "Role",
+      options: [...lookups.roles.map((r) => ({ value: r.Name, label: r.Name })), { value: "Email only", label: "Email only" }],
+      test: (p, v) => roleLabel(p, lookups) === v
+    },
+    { key: "department", label: "Department", options: lookups.departments.map((d) => ({ value: String(d.Id), label: d.Name })), test: (p, v) => p.DepartmentId === Number(v) },
+    { key: "type", label: "Account type", options: lookups.userTypes.map((t) => ({ value: String(t.Id), label: t.Name })), test: (p, v) => p.UserTypeId === Number(v) },
+    { key: "status", label: "Status", options: [{ value: "on", label: "Active" }, { value: "off", label: "Off" }], test: (p, v) => (v === "on" ? p.IsActive : !p.IsActive) }
+  ], [lookups]);
+
+  const columns = useMemo(() => ({
+    name: (p) => p.DisplayName,
+    email: (p) => p.Email,
+    role: (p) => roleLabel(p, lookups),
+    department: (p) => p.DepartmentName || "",
+    type: (p) => p.UserTypeName,
+    status: (p) => (p.IsActive ? 0 : 1)
+  }), [lookups]);
+
+  const list = useListView({
+    listKey: "people",
+    tabs,
+    defaultTab: "active",
+    filters,
+    columns,
+    defaultSort: { key: "name", dir: "asc" },
+    search: (p) => `${p.DisplayName} ${p.Email} ${p.DepartmentName || ""}`
+  });
+  const rows = list.apply(people);
 
   return (
-    <div className="card">
-      <h1>People</h1>
-      <div className="filters">
-        <input placeholder="Search name or email" value={search} onChange={(e) => setSearch(e.target.value)} />
-        <label className="check">
-          <input type="checkbox" checked={includeInactive} onChange={(e) => setIncludeInactive(e.target.checked)} />
-          Show switched-off people
-        </label>
+    <>
+      <div className="head-row">
+        <h1>{list.view ? list.view.Name : "People"}</h1>
+        {rows && <span className="muted small">{rows.length} {rows.length === 1 ? "person" : "people"}</span>}
       </div>
+      <ListTabs list={list} />
+      <ListToolbar list={list} placeholder="Search name, email or department" />
       {error && <p className="error">{error}</p>}
-      {!people ? <p className="muted">Loading…</p> : (
-        <table className="grid">
-          <thead>
-            <tr><th>Name</th><th>Email</th><th>Type</th><th>Role</th><th>Department</th><th>Manages</th><th>Active</th>{me.IsAdmin && <th />}</tr>
-          </thead>
-          <tbody>
-            {people.map((p) => (
-              <tr key={p.Id}>
-                <td>{p.DisplayName}</td>
-                <td>{p.Email}</td>
-                <td>{p.UserTypeName}</td>
-                <td>{p.RoleName}</td>
-                <td>{p.DepartmentName}</td>
-                <td>{p.ManagedDepartmentIds.map((id) => lookups.departments.find((d) => d.Id === id)?.Name).filter(Boolean).join(", ")}</td>
-                <td>{p.IsActive ? "Yes" : "No"}</td>
-                {me.IsAdmin && <td><button className="link" onClick={() => setEditing({ ...p })}>Edit</button></td>}
+      {!rows && <p className="muted">Loading…</p>}
+      {rows && !rows.length && <p className="empty">Nobody here.</p>}
+      {rows && rows.length > 0 && (
+        <div className="card flush scroll">
+          <table className="tbl" style={{ minWidth: 820 }}>
+            <thead>
+              <tr>
+                <SortTh list={list} col="name">Name</SortTh>
+                <SortTh list={list} col="email">Email</SortTh>
+                <SortTh list={list} col="role">Role</SortTh>
+                <SortTh list={list} col="department">Department</SortTh>
+                <SortTh list={list} col="type">Account type</SortTh>
+                <SortTh list={list} col="status">Status</SortTh>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-
-      {editing && (
-        <div className="dialog-backdrop" onClick={() => setEditing(null)}>
-          <div className="card form dialog" onClick={(e) => e.stopPropagation()}>
-            <h2>{editing.Email}</h2>
-            <div className="row">
-              <label>First name<input value={editing.FirstName || ""} onChange={(e) => setEditing({ ...editing, FirstName: e.target.value })} /></label>
-              <label>Last name<input value={editing.LastName || ""} onChange={(e) => setEditing({ ...editing, LastName: e.target.value })} /></label>
-            </div>
-            <label>Display name<input value={editing.DisplayName || ""} onChange={(e) => setEditing({ ...editing, DisplayName: e.target.value })} /></label>
-            <label>
-              Role
-              <select value={editing.RoleId || ""} disabled={editing.Id === me.Id} onChange={(e) => setEditing({ ...editing, RoleId: Number(e.target.value) })}>
-                {roles.map((r) => <option key={r.Id} value={r.Id}>{r.Name}</option>)}
-              </select>
-            </label>
-            <label>
-              User type
-              <select value={editing.UserTypeId || ""} onChange={(e) => setEditing({ ...editing, UserTypeId: Number(e.target.value) })}>
-                {lookups.userTypes.map((t) => <option key={t.Id} value={t.Id}>{t.Name}</option>)}
-              </select>
-            </label>
-            <label>
-              Department
-              <select value={editing.DepartmentId || ""} onChange={(e) => setEditing({ ...editing, DepartmentId: Number(e.target.value) || null })}>
-                <option value="">None</option>
-                {lookups.departments.map((d) => <option key={d.Id} value={d.Id}>{d.Name}</option>)}
-              </select>
-            </label>
-            <fieldset>
-              <legend>Manages these departments</legend>
-              <div className="checks">
-                {lookups.departments.map((d) => (
-                  <label key={d.Id} className="check">
-                    <input type="checkbox" checked={editing.ManagedDepartmentIds.includes(d.Id)}
-                      onChange={(e) => setEditing({
-                        ...editing,
-                        ManagedDepartmentIds: e.target.checked
-                          ? [...editing.ManagedDepartmentIds, d.Id]
-                          : editing.ManagedDepartmentIds.filter((x) => x !== d.Id)
-                      })} />
-                    {d.Name}
-                  </label>
-                ))}
-              </div>
-            </fieldset>
-            <label className="check">
-              <input type="checkbox" checked={editing.IsActive} disabled={editing.Id === me.Id} onChange={(e) => setEditing({ ...editing, IsActive: e.target.checked })} />
-              Active (switched-off people can't sign in)
-            </label>
-            <div className="row">
-              <button className="primary" onClick={save}>Save</button>
-              <button className="link" onClick={() => setEditing(null)}>Cancel</button>
-            </div>
-          </div>
+            </thead>
+            <tbody>
+              {rows.map((p) => (
+                <tr key={p.Id}>
+                  <td><Link className="link" to={`/people/${p.Id}`}>{p.DisplayName}</Link></td>
+                  <td className="small">{p.Email}</td>
+                  <td>{roleLabel(p, lookups)}</td>
+                  <td>{p.DepartmentName || <span className="muted">None</span>}</td>
+                  <td>{p.UserTypeName}</td>
+                  <td>{p.IsActive ? "Active" : <span className="muted">Off</span>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
-    </div>
+    </>
   );
 }
