@@ -108,7 +108,7 @@ function friendlyError(error) {
   return error;
 }
 
-endpoint("adminListLookup", { methods: ["GET"], route: "admin/lookups/{table}", role: "admin" }, async (request) => {
+endpoint("adminListLookup", { methods: ["GET"], route: "manage/lookups/{table}", role: "admin" }, async (request) => {
   const def = getDef(request);
   const pool = await getConnection();
   const result = await pool.request().query(`SELECT ${columnList(def)} FROM ${def.table} ORDER BY ${orderBy(def)}`);
@@ -117,7 +117,7 @@ endpoint("adminListLookup", { methods: ["GET"], route: "admin/lookups/{table}", 
 
 endpoint(
   "adminCreateLookup",
-  { methods: ["POST"], route: "admin/lookups/{table}", role: "admin", failMessage: "Could not add the entry" },
+  { methods: ["POST"], route: "manage/lookups/{table}", role: "admin", failMessage: "Could not add the entry" },
   async (request) => {
     const def = getDef(request);
     const values = readValues(def, await readJson(request), true);
@@ -137,7 +137,7 @@ endpoint(
 
 endpoint(
   "adminUpdateLookup",
-  { methods: ["PATCH"], route: "admin/lookups/{table}/{id:int}", role: "admin", failMessage: "Could not save the entry" },
+  { methods: ["PATCH"], route: "manage/lookups/{table}/{id:int}", role: "admin", failMessage: "Could not save the entry" },
   async (request) => {
     const def = getDef(request);
     const values = readValues(def, await readJson(request), false);
@@ -159,7 +159,7 @@ endpoint(
 // Body: [{ fieldKey, label, isRequired, sortOrder }]
 endpoint(
   "adminSaveTicketTypeFields",
-  { methods: ["PUT"], route: "admin/ticket-type-fields/{typeId:int}", role: "admin", failMessage: "Could not save the form fields" },
+  { methods: ["PUT"], route: "manage/ticket-type-fields/{typeId:int}", role: "admin", failMessage: "Could not save the form fields" },
   async (request) => {
     const typeId = Number(request.params.typeId);
     const body = await readJson(request);

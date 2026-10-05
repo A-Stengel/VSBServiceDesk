@@ -2,13 +2,15 @@ const { endpoint, readJson } = require("../shared/endpoint");
 const { HttpError } = require("../shared/errors");
 const { SETTINGS_META, getSettings, saveSettings } = require("../shared/settings");
 
-endpoint("getSettings", { methods: ["GET"], route: "admin/settings", role: "admin" }, async () => {
+// Admin routes live under "manage/" because Azure Functions reserves routes
+// that start with "admin".
+endpoint("getSettings", { methods: ["GET"], route: "manage/settings", role: "admin" }, async () => {
   return { jsonBody: { meta: SETTINGS_META, values: await getSettings() } };
 });
 
 endpoint(
   "saveSettings",
-  { methods: ["PUT"], route: "admin/settings", role: "admin", failMessage: "Could not save the settings" },
+  { methods: ["PUT"], route: "manage/settings", role: "admin", failMessage: "Could not save the settings" },
   async (request) => {
     const body = await readJson(request);
     const values = {};

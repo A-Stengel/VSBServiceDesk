@@ -64,12 +64,12 @@ export const api = {
   createUser: (data) => request("POST", "users", data),
   updateUser: (id, data) => request("PATCH", `users/${id}`, data),
 
-  adminLookup: (table) => request("GET", `admin/lookups/${table}`),
-  adminCreateLookup: (table, data) => request("POST", `admin/lookups/${table}`, data),
-  adminUpdateLookup: (table, id, data) => request("PATCH", `admin/lookups/${table}/${id}`, data),
-  saveTicketTypeFields: (typeId, fields) => request("PUT", `admin/ticket-type-fields/${typeId}`, fields),
-  settings: () => request("GET", "admin/settings"),
-  saveSettings: (values) => request("PUT", "admin/settings", values)
+  adminLookup: (table) => request("GET", `manage/lookups/${table}`),
+  adminCreateLookup: (table, data) => request("POST", `manage/lookups/${table}`, data),
+  adminUpdateLookup: (table, id, data) => request("PATCH", `manage/lookups/${table}/${id}`, data),
+  saveTicketTypeFields: (typeId, fields) => request("PUT", `manage/ticket-type-fields/${typeId}`, fields),
+  settings: () => request("GET", "manage/settings"),
+  saveSettings: (values) => request("PUT", "manage/settings", values)
 };
 
 export function formatDate(value) {
