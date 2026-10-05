@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api, formatDate } from "../api.js";
 import { useApp } from "../App.jsx";
+import Logo, { logoChanged } from "../components/Logo.jsx";
 
 // Settings, grouped down the left. Lists can be added to, renamed,
 // reordered and turned off or on, never deleted, because old tickets point
@@ -34,6 +35,7 @@ const SECTIONS = [
   { key: "lowStock", label: "Low-stock warning", history: "lowStock" },
   { key: "sharedViews", label: "Shared views" },
   { group: "System" },
+  { key: "logo", label: "Logo", history: "logo" },
   { key: "roles", label: "Roles", table: "roles" },
   { key: "userTypes", label: "Account types", table: "userTypes" },
   { key: "billingPeriods", label: "Billing periods", table: "billingPeriods" },
@@ -54,7 +56,8 @@ const DESCRIPTIONS = {
   holidays: "Skipped when counting business days for the warning and automatic close.",
   roles: "What someone can do comes from the Technician, Admin and Event manager ticks.",
   userTypes: "Staff sign in; outside people and shared mailboxes only email in.",
-  billingPeriods: "How often a license is billed, for the monthly cost on the Inventory page."
+  billingPeriods: "How often a license is billed, for the monthly cost on the Inventory page.",
+  logo: "Shown in the header, on the loading screen and in the browser tab. A square PNG with a transparent background looks best."
 };
 
 export default function Settings() {
@@ -130,11 +133,54 @@ function Section({ section, onChange }) {
       return <SettingsForm keys={["LowStockThreshold"]} onChange={onChange} note="On the Inventory page, Available turns orange at or below this number." />;
     case "sharedViews":
       return <SharedViews />;
+    case "logo":
+      return <LogoSettings onChange={onChange} />;
     case "advanced":
       return <SettingsForm exclude onChange={onChange} />;
     default:
       return <LookupList table={section.table} onChange={onChange} />;
   }
+}
+
+function LogoSettings({ onChange }) {
+  const { notify } = useApp();
+  const [file, setFile] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [inputKey, setInputKey] = useState(0);
+
+  async function save(action, message) {
+    setBusy(true);
+    try {
+      await action();
+      logoChanged();
+      setFile(null);
+      setInputKey((n) => n + 1);
+      notify(message);
+      onChange();
+    } catch (err) {
+      notify(err.message, true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="form">
+      <div className="logo-preview">
+        <div className="on-dark"><Logo size={36} />VSB Service Desk</div>
+        <Logo size={84} className="boot-logo" />
+      </div>
+      <label>
+        New logo (PNG, JPG, WebP or GIF, up to 2 MB)
+        <input key={inputKey} id="logo-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif"
+          onChange={(e) => setFile(e.target.files[0] || null)} />
+      </label>
+      <div className="row">
+        <button className="btn pri" disabled={!file || busy} onClick={() => save(() => api.uploadLogo(file), "Logo saved.")}>Upload logo</button>
+        <button className="btn" disabled={busy} onClick={() => save(api.resetLogo, "Back to the built-in VSB seal.")}>Use the built-in VSB seal</button>
+      </div>
+    </div>
+  );
 }
 
 function History({ section }) {

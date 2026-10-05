@@ -10,6 +10,9 @@ const config = {
     type: "azure-active-directory-default",
     options: process.env.AZURE_CLIENT_ID ? { clientId: process.env.AZURE_CLIENT_ID } : {}
   },
+  // Long enough for the database to wake up or fail over; the Static Web App
+  // gives the API about 45 seconds per request.
+  connectionTimeout: 30000,
   options: {
     encrypt: true,
     trustServerCertificate: false

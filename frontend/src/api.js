@@ -1,5 +1,6 @@
 // Small wrapper around fetch for the /api routes. Errors carry the server's
-// message so pages can show it.
+// message so pages can show it, and the HTTP status (none when the request
+// never reached the server).
 async function request(method, path, body) {
   const isForm = body instanceof FormData;
   const response = await fetch(`/api/${path}`, {
@@ -10,7 +11,8 @@ async function request(method, path, body) {
   if (response.status === 401) {
     // Never redirect from here: an automatic redirect on 401 is what caused
     // the sign-in loop. App.jsx shows a Sign in button instead.
-    throw new Error(
+    throw httpError(
+      401,
       (await isSignedIn())
         ? "You're signed in, but the service desk API didn't accept the sign-in. " +
             "Check the API is published and linked to the Static Web App (README Steps 3 and 5)."
@@ -18,8 +20,14 @@ async function request(method, path, body) {
     );
   }
   const data = await response.json().catch(() => null);
-  if (!response.ok) throw new Error(data?.error || `Request failed (${response.status})`);
+  if (!response.ok) throw httpError(response.status, data?.error || `Request failed (${response.status})`);
   return data;
+}
+
+function httpError(status, message) {
+  const error = new Error(message);
+  error.status = status;
+  return error;
 }
 
 export async function isSignedIn() {
@@ -99,7 +107,9 @@ export const api = {
   saveTicketTypeFields: (typeId, categoryId, fields) =>
     request("PUT", `manage/ticket-type-fields/${typeId}` + query({ categoryId }), fields),
   settings: () => request("GET", "manage/settings"),
-  saveSettings: (values) => request("PUT", "manage/settings", values)
+  saveSettings: (values) => request("PUT", "manage/settings", values),
+  uploadLogo: (file) => request("PUT", "manage/logo", withFiles({}, [file])),
+  resetLogo: () => request("DELETE", "manage/logo")
 };
 
 export function formatDate(value) {
