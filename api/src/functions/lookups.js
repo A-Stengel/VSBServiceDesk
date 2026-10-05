@@ -5,7 +5,8 @@ const { LOOKUPS, FIELD_KEYS, orderBy, columnList } = require("../shared/lookups"
 const { getSettings } = require("../shared/settings");
 
 // Everything the forms need in one call: the active rows of every lookup, which
-// fields each ticket type shows, and the status/priority ids the screens use.
+// fields each ticket type (and category) shows, the status/priority ids the
+// screens use, and the event booking guidelines.
 endpoint("getLookups", { methods: ["GET"], route: "lookups" }, async () => {
   const pool = await getConnection();
   const lookups = {};
@@ -14,7 +15,7 @@ endpoint("getLookups", { methods: ["GET"], route: "lookups" }, async () => {
     lookups[key] = result.recordset;
   }
   const fields = await pool.request().query(`
-    SELECT TicketTypeId, FieldKey, Label, IsRequired, SortOrder
+    SELECT TicketTypeId, CategoryId, FieldKey, Label, IsRequired, SortOrder
     FROM dbo.TicketTypeFields
     ORDER BY TicketTypeId, SortOrder
   `);
@@ -28,8 +29,14 @@ endpoint("getLookups", { methods: ["GET"], route: "lookups" }, async () => {
         awaitingStatusId: settings.AwaitingStatusId,
         closedStatusId: settings.ClosedStatusId,
         defaultPriorityId: settings.DefaultPriorityId,
-        webSourceId: settings.WebSourceId
-      }
+        webSourceId: settings.WebSourceId,
+        bookingPendingStatusId: settings.BookingPendingStatusId,
+        bookingConfirmedStatusId: settings.BookingConfirmedStatusId,
+        bookingDeclinedStatusId: settings.BookingDeclinedStatusId,
+        bookingCancelledStatusId: settings.BookingCancelledStatusId,
+        bookingTicketTypeId: settings.BookingTicketTypeId
+      },
+      eventGuidelines: settings.EventGuidelines || ""
     }
   };
 });
@@ -155,13 +162,17 @@ endpoint(
   }
 );
 
-// Replaces the form fields shown for one ticket type.
+// Replaces the form fields shown for one ticket type, or with ?categoryId=
+// for one of its categories (shown when that category is picked).
 // Body: [{ fieldKey, label, isRequired, sortOrder }]
 endpoint(
   "adminSaveTicketTypeFields",
   { methods: ["PUT"], route: "manage/ticket-type-fields/{typeId:int}", role: "admin", failMessage: "Could not save the form fields" },
   async (request) => {
     const typeId = Number(request.params.typeId);
+    const categoryRaw = request.query.get("categoryId");
+    const categoryId = categoryRaw ? Number(categoryRaw) : null;
+    if (categoryRaw && !Number.isInteger(categoryId)) throw new HttpError(400, "Category must be a valid id");
     const body = await readJson(request);
     if (!Array.isArray(body)) throw new HttpError(400, "Send a list of fields");
     const seen = new Set();
@@ -173,23 +184,33 @@ endpoint(
       if (!label || label.length > 100) throw new HttpError(400, "Each field needs a label of 100 characters or fewer");
       return { fieldKey: f.fieldKey, label, isRequired: !!f.isRequired, sortOrder: Number.isInteger(f.sortOrder) ? f.sortOrder : (i + 1) * 10 };
     });
-    if (seen.has("subcategory") && !seen.has("category")) throw new HttpError(400, "Subcategory needs Category on the form too");
+    if (categoryId && (seen.has("category") || seen.has("subcategory"))) {
+      throw new HttpError(400, "Category and Subcategory are set for the whole ticket type, not per category");
+    }
+    if (!categoryId && seen.has("subcategory") && !seen.has("category")) throw new HttpError(400, "Subcategory needs Category on the form too");
 
     await withTransaction(async (tx) => {
       const exists = await tx.request().input("Id", sql.Int, typeId).query("SELECT 1 AS x FROM dbo.TicketTypes WHERE Id = @Id");
       if (!exists.recordset.length) throw new HttpError(404, "Ticket type not found");
-      await tx.request().input("Id", sql.Int, typeId).query("DELETE FROM dbo.TicketTypeFields WHERE TicketTypeId = @Id");
+      if (categoryId) {
+        const category = await tx.request().input("Id", sql.Int, categoryId).input("TypeId", sql.Int, typeId)
+          .query("SELECT 1 AS x FROM dbo.Categories WHERE Id = @Id AND TicketTypeId = @TypeId");
+        if (!category.recordset.length) throw new HttpError(400, "That category isn't under this ticket type");
+      }
+      await tx.request().input("Id", sql.Int, typeId).input("CategoryId", sql.Int, categoryId)
+        .query("DELETE FROM dbo.TicketTypeFields WHERE TicketTypeId = @Id AND (CategoryId = @CategoryId OR (CategoryId IS NULL AND @CategoryId IS NULL))");
       for (const f of fields) {
         await tx
           .request()
           .input("TypeId", sql.Int, typeId)
+          .input("CategoryId", sql.Int, categoryId)
           .input("FieldKey", sql.NVarChar(50), f.fieldKey)
           .input("Label", sql.NVarChar(100), f.label)
           .input("IsRequired", sql.Bit, f.isRequired)
           .input("SortOrder", sql.Int, f.sortOrder)
           .query(`
-            INSERT INTO dbo.TicketTypeFields (TicketTypeId, FieldKey, Label, IsRequired, SortOrder)
-            VALUES (@TypeId, @FieldKey, @Label, @IsRequired, @SortOrder)
+            INSERT INTO dbo.TicketTypeFields (TicketTypeId, CategoryId, FieldKey, Label, IsRequired, SortOrder)
+            VALUES (@TypeId, @CategoryId, @FieldKey, @Label, @IsRequired, @SortOrder)
           `);
       }
     });

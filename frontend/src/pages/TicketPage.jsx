@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
-import { api, dayValue, formatDate, formatDay, money } from "../api.js";
+import { Link, useParams } from "react-router-dom";
+import { api, dayValue, formatDate, formatDay, formatWallRange, money } from "../api.js";
 import { useApp } from "../App.jsx";
 import PersonPicker from "../components/PersonPicker.jsx";
 
@@ -49,8 +49,19 @@ export default function TicketPage() {
 
       <aside className="ticket-side">
         {me.IsTechnician ? <TechnicianPanel ticket={ticket} onSaved={load} /> : <RequesterPanel ticket={ticket} />}
+        {data.booking && (
+          <div className="card">
+            <h3>Event booking</h3>
+            <p><Link to={`/events/${data.booking.Id}`}>{data.booking.Title}</Link></p>
+            <p className="muted">
+              {data.booking.RoomName} · {formatWallRange(data.booking.StartAt.slice(0, 16), data.booking.EndAt.slice(0, 16))} · {data.booking.StatusName}
+            </p>
+          </div>
+        )}
         {(ticket.UsesInventory || data.items.length > 0) && <ItemsPanel ticket={ticket} items={data.items} onSaved={load} />}
-        {data.checklist.length > 0 && <ChecklistPanel ticket={ticket} checklist={data.checklist} onSaved={load} />}
+        {(data.checklist.length > 0 || (me.IsTechnician && ticket.UsesChecklist)) && (
+          <ChecklistPanel ticket={ticket} checklist={data.checklist} onSaved={load} />
+        )}
         {me.IsTechnician && data.events.length > 0 && (
           <div className="card">
             <h3>History</h3>
@@ -195,20 +206,35 @@ function TechnicianPanel({ ticket, onSaved }) {
     </label>
   );
   const subcategories = lookups.subcategories.filter((s) => s.CategoryId === ticket.CategoryId);
+  const categories = lookups.categories.filter((c) => c.TicketTypeId === ticket.TicketTypeId);
+  // A retired type or category stays visible on tickets that already have it
+  const types = lookups.ticketTypes.some((t) => t.Id === ticket.TicketTypeId)
+    ? lookups.ticketTypes
+    : [...lookups.ticketTypes, { Id: ticket.TicketTypeId, Name: `${ticket.TicketTypeName} (retired)` }];
+  if (ticket.CategoryId && !categories.some((c) => c.Id === ticket.CategoryId)) {
+    categories.push({ Id: ticket.CategoryId, Name: ticket.CategoryName });
+  }
 
   return (
     <div className="card form">
       {select("Status", "statusId", lookups.statuses, ticket.StatusId)}
       {select("Assigned To", "technicianId", technicians, ticket.TechnicianId, true)}
       {select("Priority", "priorityId", lookups.priorities, ticket.PriorityId)}
-      {select("Type", "ticketTypeId", lookups.ticketTypes, ticket.TicketTypeId)}
       <label>
-        Category
-        <select value={ticket.CategoryId ?? ""} onChange={(e) => save({ categoryId: e.target.value || null, subcategoryId: null })}>
-          <option value="">None</option>
-          {lookups.categories.map((c) => <option key={c.Id} value={c.Id}>{c.Name}</option>)}
+        Type
+        <select value={ticket.TicketTypeId} onChange={(e) => save({ ticketTypeId: e.target.value, categoryId: null, subcategoryId: null })}>
+          {types.map((t) => <option key={t.Id} value={t.Id}>{t.Name}</option>)}
         </select>
       </label>
+      {categories.length > 0 && (
+        <label>
+          Category
+          <select value={ticket.CategoryId ?? ""} onChange={(e) => save({ categoryId: e.target.value || null, subcategoryId: null })}>
+            <option value="">None</option>
+            {categories.map((c) => <option key={c.Id} value={c.Id}>{c.Name}</option>)}
+          </select>
+        </label>
+      )}
       {subcategories.length > 0 && select("Subcategory", "subcategoryId", subcategories, ticket.SubcategoryId, true)}
       {select("Source", "sourceId", lookups.sources, ticket.SourceId)}
       {select("Department", "departmentId", lookups.departments, ticket.DepartmentId, true)}
@@ -301,7 +327,29 @@ function ItemsPanel({ ticket, items, onSaved }) {
 }
 
 function ChecklistPanel({ ticket, checklist, onSaved }) {
-  const { me } = useApp();
+  const { me, lookups } = useApp();
+  const [adding, setAdding] = useState("");
+  const [holdings, setHoldings] = useState(null);
+  const personId = ticket.ForUserId || (ticket.ForPersonName ? null : ticket.RequesterId);
+
+  useEffect(() => {
+    if (!me.IsTechnician || !personId) return setHoldings(null);
+    api.holdings(personId).then(setHoldings).catch(() => setHoldings(null));
+  }, [me.IsTechnician, personId, checklist.length]);
+
+  // The picker's value says what kind of line it is: item:, software:,
+  // seat: or held: followed by the id.
+  async function addLine() {
+    const [kind, id] = adding.split(":");
+    const body = { item: { inventoryItemId: Number(id), quantity: 1 }, software: { softwareId: Number(id) }, seat: { seatId: Number(id) }, held: { ticketItemId: Number(id) } }[kind];
+    try {
+      await api.addChecklistLine(ticket.Id, body);
+      setAdding("");
+      onSaved();
+    } catch (err) {
+      alert(err.message);
+    }
+  }
   async function toggle(item, isDone) {
     try {
       await api.updateChecklist(ticket.Id, item.Id, isDone);
@@ -323,6 +371,26 @@ function ChecklistPanel({ ticket, checklist, onSaved }) {
           </span>
         </label>
       ))}
+      {me.IsTechnician && ticket.UsesChecklist && (
+        <div className="row">
+          <select value={adding} onChange={(e) => setAdding(e.target.value)}>
+            <option value="">Add a line</option>
+            <optgroup label="Hand out to keep">
+              {lookups.inventoryItems.map((i) => <option key={`i${i.Id}`} value={`item:${i.Id}`}>{i.Name}</option>)}
+            </optgroup>
+            <optgroup label="Grant a license">
+              {lookups.software.map((s) => <option key={`s${s.Id}`} value={`software:${s.Id}`}>{s.Name}</option>)}
+            </optgroup>
+            {holdings && (holdings.items.length > 0 || holdings.seats.length > 0) && (
+              <optgroup label="Take back from them">
+                {holdings.items.map((i) => <option key={`h${i.Id}`} value={`held:${i.Id}`}>Collect: {i.Name}{i.Quantity > 1 ? ` (x${i.Quantity})` : ""}</option>)}
+                {holdings.seats.map((s) => <option key={`r${s.Id}`} value={`seat:${s.Id}`}>Remove license: {s.Name}</option>)}
+              </optgroup>
+            )}
+          </select>
+          <button type="button" disabled={!adding} onClick={addLine}>Add</button>
+        </div>
+      )}
     </div>
   );
 }

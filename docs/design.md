@@ -1,6 +1,6 @@
 # VSB Service Desk Design
 
-Version 3, 2026-10-02.
+Version 4, 2026-10-05.
 
 ## Summary
 
@@ -28,13 +28,38 @@ every ticket from one queue.
   Which fields each type shows is set in Settings.
 - **Everything configurable.** Every pick-list is a lookup table managed on a
   Settings page, in a star schema.
-- **More than break-fix.** Equipment rentals, event bookings, equipment
-  provisioning, access requests, onboarding and offboarding are ticket types.
+- **Three ticket types.** Support, Access & Equipment (with Onboarding,
+  Access & Equipment Change and Off Boarding under it) and Equipment Rental.
   Costs are tracked from inventory and per-person software licenses. There is no
   approval step.
+- **Event booking.** Staff book a conference room, with any equipment they
+  need, on one form. HR confirms the room in its own Event Booking view, and
+  the app puts the event on the VSB Events shared calendar. Equipment creates a
+  linked Equipment Rental ticket for technicians.
 - **Reports later.** Reports are not in the first version.
 - **Switchover.** Every old ticket is imported once from a SharePoint CSV
   export, and both systems run side by side on the same mailbox while you test.
+
+## What changed in version 4
+
+Decided with AIdan on 2026-10-05:
+
+- **Ticket types.** Down to three: Support, Access & Equipment and Equipment
+  Rental. Event Booking and Equipment Provisioning are no longer ticket types.
+- **Access & Equipment.** Replaces Access Request, Onboarding and Offboarding.
+  Its categories are Onboarding (a new hire gets their equipment and software),
+  Off Boarding (the reverse) and Access & Equipment Change (adding or removing
+  equipment or software during someone's employment). Equipment that people
+  keep now goes out only through these.
+- **Categories belong to a ticket type.** Support keeps its own categories,
+  Access & Equipment gets the three above, and Equipment Rental has none.
+- **Event bookings are their own table**, not tickets. A booking holds the room
+  and event details. Only when equipment is requested does it also get a linked
+  Equipment Rental ticket, so room-only bookings never reach the IT queue.
+- **No SharePoint or Power Automate.** The app emails HR and writes the VSB
+  Events calendar itself.
+- **New Event Manager role** for HR. Event Managers handle room bookings and
+  the room list, and nothing else.
 
 ## Architecture
 
@@ -49,6 +74,7 @@ flowchart LR
     func -->|"managed identity"| sql[("Azure SQL")]
     func -->|"managed identity"| blob[("Blob Storage")]
     func -->|"Graph: read, send"| mbx["servicedesk mailbox"]
+    func -->|"Graph: events"| cal["VSB Events calendar"]
     outside["Anyone with email"] -->|"email"| mbx
     pa["Old Power App"] -.->|"parallel run"| mbx
 ```
@@ -68,7 +94,8 @@ flowchart LR
   ticket.
 - **Microsoft Graph.** The Function App's managed identity gets Mail.Read and
   Mail.Send. Exchange RBAC for Applications limits both to
-  `servicedesk@vsb.org`, so it cannot touch any other mailbox.
+  `servicedesk@vsb.org`, so it cannot touch any other mailbox. It also needs
+  write access to the VSB Events group calendar (see Event booking).
 - **Application Insights.** Collects logs and errors from the Function App.
 
 Expected cost is about $10 to $15 a month, mostly the Static Web Apps Standard
@@ -91,22 +118,33 @@ managed on the Settings page.
   External Action Needed, Closed (closed).
 - **Priorities.** Extra column `Rank`. Starting values: Low, Normal, High,
   Urgent.
-- **Categories.** Starting values: Phone, Software/Application, iMIS,
-  Printers/Copiers, Hardware, Other.
+- **Categories.** Extra column `TicketTypeId`, so each category belongs to one
+  ticket type, plus `ChecklistSource` (onboarding, offboarding or empty).
+  Starting values for Support: Phone, Software/Application, iMIS,
+  Printers/Copiers, Hardware, Other. For Access & Equipment: Onboarding
+  (onboarding checklist), Access & Equipment Change (no checklist) and Off
+  Boarding (offboarding checklist). Equipment Rental has none.
 - **Subcategories.** Extra column `CategoryId`. You fill these in per category.
 - **Sources.** Starting values: Web, Email, Phone, Walk-up, Import.
 - **TicketTypeFields.** Which form fields each ticket type shows, and which are
-  required: TicketTypeId, FieldKey, IsShown, IsRequired, SortOrder. This is how
-  the form changes by type.
+  required: TicketTypeId, CategoryId, FieldKey, IsShown, IsRequired,
+  SortOrder. An empty CategoryId applies to the whole type; a filled one only
+  applies when that category is picked. This is how the form changes by type
+  and, for Access & Equipment, by category.
 - **TicketTypes.** Extra columns `UsesDates`, `UsesInventory`, `UsesLicenses`
-  and `UsesChecklist`. Starting values: Support, Equipment Rental, Event
-  Booking, Equipment Provisioning, Access Request, Onboarding, Offboarding.
+  and `UsesChecklist`. Starting values: Support, Access & Equipment, Equipment
+  Rental.
+- **BookingStatuses.** Extra columns `IsActiveBooking` and `Color`. Starting
+  values: Pending, Confirmed (both active), Declined, Cancelled.
+- **Rooms.** Name only. Managed by Event Managers in the Event Booking view, not
+  on the Settings page.
 - **Departments.** Your existing table, with an added `Code` column for short
   codes like RM and AS.
 - **Holidays.** Date and Name. These dates are skipped when counting business
   days.
 - **UserTypes.** Starting values: Staff, External, Shared Mailbox.
-- **Roles.** Starting values: Requester, Technician, Admin.
+- **Roles.** Extra column `IsEventManager`. Starting values: Requester,
+  Event Manager, Technician, Admin.
 - **BillingPeriods.** Extra column `MonthsPerPeriod`. Starting values: Monthly
   (1), Yearly (12).
 
@@ -157,6 +195,13 @@ getting access.
   stay out of the conversation.
 - **InboundEmails.** One mailbox message already processed: EmailMessageId
   (unique), ReceivedAt, TicketId.
+- **EventBookings.** One room booking: RequesterId, Title, StartAt, EndAt,
+  RoomId, AttendeeCount, Refreshments, Foia, LunchCatered, Comments,
+  BookingStatusId, TicketId (the linked Equipment Rental ticket, empty for
+  room-only bookings), CalendarEventId, ConfirmedById, ConfirmedAt, CreatedAt,
+  UpdatedAt.
+- **BookingEvents.** One change to a booking, for history, the same way as
+  TicketEvents: BookingId, ActorId, Field, OldValue, NewValue, At.
 
 Ticket numbers display padded to 7 digits. Imported tickets keep their old
 numbers, and new tickets start at 0010000, so the two systems never use the same
@@ -171,6 +216,10 @@ price change doesn't rewrite past costs.
   `UserTypeId`, `RoleId`, `DepartmentId` and `IsActive`. External senders and
   shared mailboxes are added automatically the first time they email.
 - **Departments.** Add `Code`, `SortOrder` and `IsActive`.
+- **Existing test tickets.** The version 4 script moves test tickets of the
+  old Access Request, Onboarding and Offboarding types to Access & Equipment
+  with the matching category, retires the Event Booking and Equipment
+  Provisioning types, and leaves their test tickets as they are.
 - **UserDepartments.** Renamed `DepartmentManagers`: one row per manager per
   department, so a manager can be linked to several departments. Each person's
   own department is the single `Users.DepartmentId`.
@@ -179,7 +228,9 @@ price change doesn't rewrite past costs.
 
 One row per setting: the outgoing email switch, the 3 and 4 business-day limits,
 the mailbox address, the IT team's notification addresses, the status a ticket
-switches to when the requester replies, and how often to check the mailbox.
+switches to when the requester replies, how often to check the mailbox, the
+events calendar address, and the event booking Guidelines text (edited by Event
+Managers).
 
 ## Screens
 
@@ -195,19 +246,23 @@ App. The staff screens follow Zendesk.
   status, technician and last update.
 - **Ticket.** The conversation without technician notes, attachments, a reply
   box, and the survey once the ticket is closed.
+- **Book an event.** The booking form, described under Event booking.
+- **My bookings.** Their upcoming and past bookings, each with its status. They
+  can open one to change or cancel it.
 
 Starting form fields by ticket type. Every type also has Subject, Description,
 Priority, CC and Attachments.
 
 - **Support.** Category and Subcategory.
+- **Access & Equipment.** Category first (Onboarding, Access & Equipment
+  Change or Off Boarding), then that category's fields:
+  - **Onboarding.** New hire's name, department and start date.
+  - **Access & Equipment Change.** Who it's for, and the equipment or software
+    to add or remove.
+  - **Off Boarding.** Who is leaving, and their last day.
 - **Equipment Rental.** Start date, end date, and the items and quantities
-  needed.
-- **Event Booking.** Start date, end date, and the items and quantities needed.
-  The Subject holds the event name.
-- **Equipment Provisioning.** Who it's for, and the items and quantities needed.
-- **Access Request.** Who it's for, and the software they need.
-- **Onboarding.** New hire's name, department and start date.
-- **Offboarding.** Who is leaving, and their last day.
+  needed. This is for loans with no room, like a laptop for a trip. Rentals
+  with a room start from the booking form instead.
 
 ### Technicians
 
@@ -219,9 +274,12 @@ Priority, CC and Attachments.
   side panel with Status, Category, Subcategory, Priority, Type, Technician,
   Requester and Department. Below the conversation are Reply, Technician note,
   Attachments and Move to Closure.
-- **Ticket extras.** Shown depending on the ticket type: start and end dates,
-  inventory lines with costs, license seats, or an onboarding or offboarding
-  checklist.
+- **Ticket extras.** Shown depending on the ticket type and category: start and
+  end dates, inventory lines with costs, license seats, or an onboarding or
+  offboarding checklist. A ticket linked to a booking shows the booking's
+  title, room and times, with a link to it.
+- **Event bookings.** Technicians and Admins can open the Event Booking view
+  and do everything an Event Manager can.
 - **New ticket.** The staff form, plus Requester (any user, including outside
   people), Type and Source, for phone calls and walk-ups.
 - **Inventory.** Item types with unit cost, quantity owned, how many are out
@@ -229,8 +287,20 @@ Priority, CC and Attachments.
 - **Licenses.** Each software's seats purchased, seats in use, cost per seat and
   total cost, and who holds each seat.
 - **People.** Everyone in Users, with type, department and role. Admins promote
-  a user to Technician or Admin here. A person's page lists their tickets,
-  equipment and licenses.
+  a user to Event Manager, Technician or Admin here. A person's page lists
+  their tickets, equipment and licenses.
+
+### Event Managers
+
+- **Event Booking view.** Their only page besides their own tickets and
+  bookings. It lists every booking, with Pending ones first and a filter by
+  date, room and status. Two active bookings for the same room at overlapping
+  times are flagged, as a hint only.
+- **Booking page.** The booking's details, Confirm and Decline buttons, and
+  editing of every field. The linked ticket's equipment list is shown read-only
+  with its ticket number, but they can't open the ticket or change equipment.
+- **Rooms and Guidelines.** They add, rename and retire rooms, and edit the
+  Guidelines text shown on the booking form.
 
 ### Admin
 
@@ -308,17 +378,18 @@ panels appear. Costs are recorded for tracking only and are never billed.
 
 - **Equipment Rental.** Start date, end date and inventory lines. Items count as
   out for those dates, and the app warns you if a booking would need more than
-  you own. Marking a line Returned puts the items back.
-- **Event Booking.** Works the same way as a rental.
-- **Equipment Provisioning.** Inventory lines with no end date. The items stay
-  out until an offboarding returns them.
-- **Access Request.** Software seats. Each granted seat creates a license
-  assignment for that person at the current seat cost, with no approval step.
-- **Onboarding.** A checklist with every inventory item and software marked as
-  an onboarding default already ticked. The technician unticks or adds items,
-  and each ticked line becomes a provisioning line or a seat.
-- **Offboarding.** A checklist of everything the person currently holds. Marking
-  a line done returns the equipment or frees the seat.
+  you own. Marking a line Returned puts the items back. A rental linked to an
+  event booking takes its dates from the booking.
+- **Access & Equipment, Onboarding.** A checklist with every inventory item
+  and software marked as an onboarding default already ticked. The technician
+  unticks or adds items, and each ticked line becomes an inventory line with no
+  end date (the person keeps it) or a seat.
+- **Access & Equipment, Access & Equipment Change.** Inventory lines and
+  software seats for the person, in both directions. Adding gives them
+  equipment to keep or a new seat at the current seat cost. Removing returns
+  equipment they hold or frees a seat. There is no approval step.
+- **Access & Equipment, Off Boarding.** A checklist of everything the person
+  currently holds. Marking a line done returns the equipment or frees the seat.
 - **Support.** No extra panel.
 
 The numbers are worked out like this:
@@ -331,14 +402,89 @@ The numbers are worked out like this:
 - **Prices are frozen.** The price is saved on each line, so changing a price in
   Settings later doesn't change past costs.
 
+## Event booking
+
+Room booking and equipment rental are one stop for staff. Bookings live in the
+EventBookings table, and HR works them as Event Managers. There is no
+SharePoint list and no Power Automate flow.
+
+### The booking form
+
+It matches the current Power App form. Fields marked * are required.
+
+- Title*, Start date and time*, End date and time*, Location* (picked from the
+  room list) and Attendee Count*.
+- Refreshments*, FOIA* and Will Lunch Be Catered*, each a Yes or No switch.
+- Items to Checkout, picking inventory items and quantities.
+- User Comments, for notes to HR or IT.
+- A Guidelines button that shows the text Event Managers keep up to date.
+
+The form doesn't check whether the room is free, because room availability
+can't be tracked reliably.
+
+### What happens
+
+1. **Submit.** The booking is saved as Pending and added to the VSB Events
+   calendar, with the room as the event's location, as the current flow does.
+   Every Event Manager is emailed. If any items were picked, a linked Equipment
+   Rental ticket is created for the booking's dates, and the IT team gets the
+   usual new ticket email.
+2. **Confirm or decline.** An Event Manager confirms or declines it. The
+   requester is emailed either way. Declining removes the calendar event, and
+   the linked ticket is closed with a note saying why.
+3. **Changes.** The requester, an Event Manager or a technician can change
+   anything, including moving the meeting. The calendar event is updated and
+   the Event Managers are emailed. If there's a linked ticket, its equipment
+   dates move with the booking and the assigned technician is emailed. Adding
+   items to a room-only booking creates the linked ticket then. A change
+   doesn't send a confirmed booking back to Pending.
+4. **Cancel.** The requester, an Event Manager or a technician can cancel. The
+   calendar event is removed, Event Managers are emailed, and a linked ticket is
+   closed with a note.
+
+Every change is recorded in BookingEvents. The linked ticket works like any
+other rental: technicians set the items out and mark them returned.
+
+### Who can do what
+
+- **Requester.** Books, sees and changes their own bookings.
+- **Event Manager.** Sees and changes every booking, confirms and declines,
+  manages rooms and the Guidelines text. No access to tickets, equipment or
+  Settings.
+- **Technician and Admin.** Everything an Event Manager can do, plus the
+  linked tickets.
+
+### The VSB Events calendar
+
+The calendar is the Microsoft 365 group VSB Events
+(`VSBEventsCalender@vsb.org`). The app writes events without attendees, so it
+sends no invitations. Members who follow the group still get the group's usual
+notifications, as they do now.
+
+Microsoft Graph only officially lets an app write to a group calendar on behalf
+of a signed-in person, not as the app itself. The plan is:
+
+1. Give the Function App the Graph application permission Calendars.ReadWrite,
+   limited to the group's mailbox with the same Exchange RBAC for Applications
+   scope used for `servicedesk@vsb.org`, and test writing an event to the group
+   calendar. This works for group mailboxes in practice, but Microsoft doesn't
+   document it.
+2. If that test fails, a signed-in route: each Event Manager or requester's
+   own sign-in writes the event when they submit or change it. That needs the
+   Group.ReadWrite.All delegated permission, and every requester would have to
+   be able to write to the group calendar.
+
+Calendar writes and booking emails follow the outgoing email switch. While it's
+at Off, nothing reaches the calendar or HR, so test bookings stay in the app.
+
 ## Migration and parallel run
 
 Old tickets come over once from a CSV export, and then both systems run side by
 side until you switch off the Power App.
 
 1. **Export.** You export the SharePoint lists behind the Power App to CSV:
-   tickets, plus any separate lists for notes, rentals or access requests. I'll
-   need a sample of each before writing the import.
+   tickets, plus any separate lists for notes, rentals, access requests or
+   room bookings. I'll need a sample of each before writing the import.
 2. **Import.** A Node script you run once loads the CSVs into the new tables. It
    keeps each old ticket number, creates any lookup value it doesn't recognise
    (a status or category name, for example), and matches requesters by email,
@@ -396,5 +542,8 @@ can review and test as it lands.
 5. **Timers and survey.** The 3 and 4 business-day rules and the survey page.
 6. **Inventory and licenses.** Item and software catalogs, ticket panels, and
    the onboarding and offboarding checklists.
-7. **Import.** The one-time CSV import script.
-8. **Parallel run and cutover.**
+7. **Ticket types and event booking.** The three ticket types, categories per
+   type, the Event Manager role, the booking form, the Event Booking view and
+   the calendar.
+8. **Import.** The one-time CSV import script.
+9. **Parallel run and cutover.**

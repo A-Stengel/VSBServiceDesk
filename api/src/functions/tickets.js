@@ -16,7 +16,7 @@ const { getConnection, withTransaction, sql } = require("../shared/db");
 const { getSettings } = require("../shared/settings");
 const { USER_SELECT } = require("../shared/auth");
 const { uploadFile } = require("../shared/storage");
-const { getAvailability, bookingWarnings } = require("../shared/inventory");
+const { getAvailability, bookingWarnings, readItems, addTicketItem } = require("../shared/inventory");
 const {
   TICKET_SELECT,
   personName,
@@ -61,58 +61,28 @@ async function saveAttachments(db, ticketId, conversationId, files, userId) {
   }
 }
 
-function readItems(value) {
-  if (value === undefined || value === null) return [];
-  if (!Array.isArray(value)) throw new HttpError(400, "Items must be a list");
-  const merged = new Map();
-  for (const item of value) {
-    const id = requiredId(item?.inventoryItemId, "Item");
-    const quantity = Number(item?.quantity ?? 1);
-    if (!Number.isInteger(quantity) || quantity < 1 || quantity > 1000) throw new HttpError(400, "Quantity must be a whole number from 1 to 1000");
-    merged.set(id, (merged.get(id) || 0) + quantity);
-  }
-  return [...merged].map(([inventoryItemId, quantity]) => ({ inventoryItemId, quantity }));
-}
-
 function readIdList(value, field) {
   if (value === undefined || value === null) return [];
   if (!Array.isArray(value)) throw new HttpError(400, `${field} must be a list`);
   return [...new Set(value.map((v) => requiredId(v, field)))];
 }
 
-async function addTicketItem(db, ticketId, inventoryItemId, quantity) {
-  const item = await one(db, "SELECT Id, Name, UnitCost FROM dbo.InventoryItems WHERE Id = @Id AND IsActive = 1", {
-    Id: [sql.Int, inventoryItemId]
-  });
-  if (!item) throw new HttpError(400, "That inventory item doesn't exist");
-  const row = await one(
-    db,
-    `INSERT INTO dbo.TicketItems (TicketId, InventoryItemId, Quantity, UnitCostAtTime)
-     OUTPUT INSERTED.Id
-     VALUES (@TicketId, @ItemId, @Quantity, @UnitCost)`,
-    {
-      TicketId: [sql.Int, ticketId],
-      ItemId: [sql.Int, inventoryItemId],
-      Quantity: [sql.Int, quantity],
-      UnitCost: [sql.Decimal(10, 2), item.UnitCost]
-    }
-  );
-  return { id: row.Id, name: item.Name };
-}
-
+// links.isRemoval marks a line that takes something back (collect equipment,
+// remove a license) rather than hands it out.
 async function addChecklistItem(db, ticketId, sortOrder, label, links = {}) {
   await db
     .request()
     .input("TicketId", sql.Int, ticketId)
     .input("Label", sql.NVarChar(255), label.slice(0, 255))
+    .input("IsRemoval", sql.Bit, !!links.isRemoval)
     .input("InventoryItemId", sql.Int, links.inventoryItemId || null)
     .input("SoftwareId", sql.Int, links.softwareId || null)
     .input("LicenseAssignmentId", sql.Int, links.licenseAssignmentId || null)
     .input("TicketItemId", sql.Int, links.ticketItemId || null)
     .input("SortOrder", sql.Int, sortOrder)
     .query(`
-      INSERT INTO dbo.ChecklistItems (TicketId, Label, InventoryItemId, SoftwareId, LicenseAssignmentId, TicketItemId, SortOrder)
-      VALUES (@TicketId, @Label, @InventoryItemId, @SoftwareId, @LicenseAssignmentId, @TicketItemId, @SortOrder)
+      INSERT INTO dbo.ChecklistItems (TicketId, Label, InventoryItemId, SoftwareId, LicenseAssignmentId, TicketItemId, SortOrder, IsRemoval)
+      VALUES (@TicketId, @Label, @InventoryItemId, @SoftwareId, @LicenseAssignmentId, @TicketItemId, @SortOrder, @IsRemoval)
     `);
 }
 
@@ -126,10 +96,9 @@ async function softwareNames(db, ids) {
   return names;
 }
 
-// Builds the offboarding checklist: every license seat the person holds and
-// every item handed to them that hasn't come back.
-async function addOffboardingChecklist(db, ticketId, personId) {
-  let order = 10;
+// What a person holds now: every license seat they have and every item
+// handed to them to keep that hasn't come back.
+async function getHoldings(db, personId) {
   const seats = await db.request().input("UserId", sql.Int, personId).query(`
     SELECT la.Id, s.Name
     FROM dbo.LicenseAssignments la
@@ -137,11 +106,7 @@ async function addOffboardingChecklist(db, ticketId, personId) {
     WHERE la.UserId = @UserId AND la.RemovedAt IS NULL
     ORDER BY s.Name
   `);
-  for (const seat of seats.recordset) {
-    await addChecklistItem(db, ticketId, order, `Remove license: ${seat.Name}`, { licenseAssignmentId: seat.Id });
-    order += 10;
-  }
-  const held = await db.request().input("UserId", sql.Int, personId).query(`
+  const items = await db.request().input("UserId", sql.Int, personId).query(`
     SELECT ti.Id, ti.Quantity, i.Name, ti.InventoryItemId
     FROM dbo.TicketItems ti
     JOIN dbo.Tickets t ON t.Id = ti.TicketId
@@ -150,12 +115,48 @@ async function addOffboardingChecklist(db, ticketId, personId) {
       AND (t.ForUserId = @UserId OR (t.ForUserId IS NULL AND t.RequesterId = @UserId))
     ORDER BY i.Name
   `);
-  for (const item of held.recordset) {
-    const label = `Collect: ${item.Name}${item.Quantity > 1 ? ` (x${item.Quantity})` : ""}`;
-    await addChecklistItem(db, ticketId, order, label, { ticketItemId: item.Id, inventoryItemId: item.InventoryItemId });
+  return { seats: seats.recordset, items: items.recordset };
+}
+
+const removeSeatLabel = (seat) => `Remove license: ${seat.Name}`;
+const collectLabel = (item) => `Collect: ${item.Name}${item.Quantity > 1 ? ` (x${item.Quantity})` : ""}`;
+
+// Adds removal lines for what the person holds. With "only", just the seats
+// and items picked on the form (Access & Equipment Change); without it,
+// everything (Off Boarding).
+async function addRemovalChecklist(db, ticketId, personId, order, only) {
+  const holdings = await getHoldings(db, personId);
+  const seats = only ? holdings.seats.filter((s) => only.seatIds.includes(s.Id)) : holdings.seats;
+  const items = only ? holdings.items.filter((i) => only.ticketItemIds.includes(i.Id)) : holdings.items;
+  if (only && seats.length + items.length < only.seatIds.length + only.ticketItemIds.length) {
+    throw new HttpError(400, "Something picked to remove isn't held by that person any more");
+  }
+  for (const seat of seats) {
+    await addChecklistItem(db, ticketId, order, removeSeatLabel(seat), { licenseAssignmentId: seat.Id, isRemoval: true });
     order += 10;
   }
+  for (const item of items) {
+    await addChecklistItem(db, ticketId, order, collectLabel(item), { ticketItemId: item.Id, inventoryItemId: item.InventoryItemId, isRemoval: true });
+    order += 10;
+  }
+  return order;
 }
+
+// Body "removals": { seatIds: [...], ticketItemIds: [...] }
+function readRemovals(value) {
+  if (value === undefined || value === null) return { seatIds: [], ticketItemIds: [] };
+  if (typeof value !== "object" || Array.isArray(value)) throw new HttpError(400, "Removals must be an object");
+  return { seatIds: readIdList(value.seatIds, "License"), ticketItemIds: readIdList(value.ticketItemIds, "Item") };
+}
+
+// Technicians, or the person themselves, can see what someone holds (for the
+// "to remove" list on an Access & Equipment Change).
+endpoint("personHoldings", { methods: ["GET"], route: "people/{id:int}/holdings" }, async (request, context, user) => {
+  const id = Number(request.params.id);
+  if (!user.IsTechnician && id !== user.Id) throw new HttpError(403, "Only technicians can see what someone else holds");
+  const pool = await getConnection();
+  return { jsonBody: await getHoldings(pool, id) };
+});
 
 // ---------------------------------------------------------------------------
 // List
@@ -231,8 +232,15 @@ endpoint(
     const typeId = requiredId(data.ticketTypeId, "Ticket type");
     const type = await one(pool, "SELECT * FROM dbo.TicketTypes WHERE Id = @Id AND IsActive = 1", { Id: [sql.Int, typeId] });
     if (!type) throw new HttpError(400, "Pick a ticket type");
-    const fieldRows = await pool.request().input("Id", sql.Int, typeId).query("SELECT FieldKey, Label, IsRequired FROM dbo.TicketTypeFields WHERE TicketTypeId = @Id");
-    const fields = new Map(fieldRows.recordset.map((f) => [f.FieldKey, f]));
+    const fieldsFor = async (categoryId) => {
+      const rows = await pool.request().input("Id", sql.Int, typeId).input("CategoryId", sql.Int, categoryId).query(`
+        SELECT FieldKey, Label, IsRequired FROM dbo.TicketTypeFields
+        WHERE TicketTypeId = @Id AND (CategoryId IS NULL OR CategoryId = @CategoryId)
+      `);
+      return new Map(rows.recordset.map((f) => [f.FieldKey, f]));
+    };
+    // Type-level fields first; the category's own fields join once it's known
+    let fields = await fieldsFor(null);
     const shown = (key) => fields.has(key);
     const need = (key, value) => {
       const f = fields.get(key);
@@ -247,6 +255,16 @@ endpoint(
     const cc = emailList(data.cc, "CC");
 
     const categoryId = shown("category") ? need("category", optionalId(data.categoryId, "Category")) : null;
+    let category = null;
+    if (categoryId) {
+      category = await one(pool, "SELECT Id, Name, ChecklistSource FROM dbo.Categories WHERE Id = @Id AND TicketTypeId = @TypeId AND IsActive = 1", {
+        Id: [sql.Int, categoryId],
+        TypeId: [sql.Int, typeId]
+      });
+      if (!category) throw new HttpError(400, "That category isn't under the chosen ticket type");
+      fields = await fieldsFor(categoryId);
+    }
+    const checklistSource = category?.ChecklistSource || null;
     const subcategoryId = shown("subcategory") ? need("subcategory", optionalId(data.subcategoryId, "Subcategory")) : null;
     if (subcategoryId) {
       const sub = await one(pool, "SELECT CategoryId FROM dbo.Subcategories WHERE Id = @Id", { Id: [sql.Int, subcategoryId] });
@@ -260,9 +278,17 @@ endpoint(
     const forDepartmentId = shown("newHire") ? optionalId(data.newHireDepartmentId, "Department") : null;
 
     // Onboarding always shows the equipment and license pick list
-    const onboarding = type.ChecklistSource === "onboarding";
+    const onboarding = checklistSource === "onboarding";
     const items = shown("items") || onboarding ? need("items", readItems(data.items)) : [];
     const softwareIds = shown("software") || onboarding ? need("software", readIdList(data.softwareIds, "Software")) : [];
+    const removals = shown("removals") ? readRemovals(data.removals) : { seatIds: [], ticketItemIds: [] };
+    if (removals.seatIds.length + removals.ticketItemIds.length) {
+      if (!forUserId) throw new HttpError(400, "Pick who the equipment or software is being removed from");
+      if (!user.IsTechnician && forUserId !== user.Id) throw new HttpError(403, "Only technicians can pick what to remove from someone else");
+    }
+    if (fields.get("removals")?.IsRequired && !removals.seatIds.length && !removals.ticketItemIds.length) {
+      throw new HttpError(400, `${fields.get("removals").Label} is required`);
+    }
 
     // Technicians can log a ticket for someone else and say how it came in
     let requesterId = user.Id;
@@ -275,7 +301,7 @@ endpoint(
     }
     const requester = await one(pool, "SELECT Id, DepartmentId, IsActive FROM dbo.Users WHERE Id = @Id", { Id: [sql.Int, requesterId] });
     if (!requester || !requester.IsActive) throw new HttpError(400, "That requester doesn't exist");
-    if (type.ChecklistSource === "offboarding" && !forUserId) throw new HttpError(400, "Pick who is leaving");
+    if (checklistSource === "offboarding" && !forUserId) throw new HttpError(400, "Pick who is leaving");
 
     const warnings = await bookingWarnings(pool, items, { startDate, endDate });
     const statusId = technicianId && settings.AssignedStatusId ? settings.AssignedStatusId : settings.NewStatusId;
@@ -335,7 +361,8 @@ endpoint(
             order += 10;
           }
         }
-        if (type.ChecklistSource === "offboarding") await addOffboardingChecklist(tx, id, forUserId);
+        if (type.UsesChecklist && checklistSource === "offboarding") await addRemovalChecklist(tx, id, forUserId, order);
+        else if (type.UsesChecklist && forUserId) await addRemovalChecklist(tx, id, forUserId, order, removals);
 
         await saveAttachments(tx, id, null, files, user.Id);
         await recordEvents(tx, id, user.Id, [{ field: "Created", oldValue: null, newValue: type.Name }]);
@@ -388,11 +415,19 @@ endpoint("getTicket", { methods: ["GET"], route: "tickets/{id:int}" }, async (re
     ORDER BY i.Name
   `);
   const checklist = await pool.request().input("Id", sql.Int, id).query(`
-    SELECT ci.Id, ci.Label, ci.IsDone, ci.DoneAt, ${personName("u")} AS DoneByName, ci.SortOrder
+    SELECT ci.Id, ci.Label, ci.IsDone, ci.IsRemoval, ci.DoneAt, ${personName("u")} AS DoneByName, ci.SortOrder
     FROM dbo.ChecklistItems ci
     LEFT JOIN dbo.Users u ON u.Id = ci.DoneById
     WHERE ci.TicketId = @Id
     ORDER BY ci.SortOrder, ci.Id
+  `);
+  // The event booking this ticket holds the equipment for, if any
+  const booking = await pool.request().input("Id", sql.Int, id).query(`
+    SELECT TOP (1) b.Id, b.Title, b.StartAt, b.EndAt, rm.Name AS RoomName, bs.Name AS StatusName
+    FROM dbo.EventBookings b
+    JOIN dbo.Rooms rm ON rm.Id = b.RoomId
+    JOIN dbo.BookingStatuses bs ON bs.Id = b.BookingStatusId
+    WHERE b.TicketId = @Id
   `);
   const events = tech
     ? (await pool.request().input("Id", sql.Int, id).query(`
@@ -412,6 +447,7 @@ endpoint("getTicket", { methods: ["GET"], route: "tickets/{id:int}" }, async (re
       cc: cc.recordset.map((r) => r.Email),
       items: items.recordset,
       checklist: checklist.recordset,
+      booking: booking.recordset[0] || null,
       events
     }
   };
@@ -479,6 +515,11 @@ endpoint(
       }
       const finalSub = "SubcategoryId" in changes ? changes.SubcategoryId.value : ticket.SubcategoryId;
       const finalCategory = "CategoryId" in changes ? changes.CategoryId.value : ticket.CategoryId;
+      const finalType = "TicketTypeId" in changes ? changes.TicketTypeId.value : ticket.TicketTypeId;
+      if (finalCategory && ("CategoryId" in changes || "TicketTypeId" in changes)) {
+        const category = await one(tx, "SELECT TicketTypeId FROM dbo.Categories WHERE Id = @Id", { Id: [sql.Int, finalCategory] });
+        if (!category || category.TicketTypeId !== finalType) throw new HttpError(400, "That category isn't under the ticket's type");
+      }
       if (finalSub) {
         const sub = await one(tx, "SELECT CategoryId FROM dbo.Subcategories WHERE Id = @Id", { Id: [sql.Int, finalSub] });
         if (!sub || sub.CategoryId !== finalCategory) throw new HttpError(400, "That subcategory isn't under the ticket's category");
@@ -575,6 +616,51 @@ endpoint(
 // equipment, assigns or frees a license seat. Unticking undoes it.
 // ---------------------------------------------------------------------------
 
+// Adds a line to a ticket's checklist, for what the form didn't cover.
+// Body, one of: { inventoryItemId, quantity } hand out equipment to keep,
+// { softwareId } grant a license, { seatId } remove a license the person
+// holds, { ticketItemId } collect equipment the person holds.
+endpoint(
+  "addChecklistItem",
+  { methods: ["POST"], route: "tickets/{id:int}/checklist", role: "technician", failMessage: "Could not add the checklist line" },
+  async (request, context, user) => {
+    const id = Number(request.params.id);
+    const body = await readJson(request);
+    await withTransaction(async (tx) => {
+      const ticket = await loadTicket(tx, id);
+      if (!ticket) throw new HttpError(404, "Ticket not found");
+      if (!ticket.UsesChecklist) throw new HttpError(400, "This ticket type doesn't use a checklist");
+      const last = await one(tx, "SELECT MAX(SortOrder) AS M FROM dbo.ChecklistItems WHERE TicketId = @Id", { Id: [sql.Int, id] });
+      const order = (last?.M || 0) + 10;
+      const personId = ticket.ForUserId || (ticket.ForPersonName ? null : ticket.RequesterId);
+      let label;
+      if (body.inventoryItemId) {
+        const [item] = readItems([body]);
+        const added = await addTicketItem(tx, id, item.inventoryItemId, item.quantity);
+        label = `Hand out: ${added.name}${item.quantity > 1 ? ` (x${item.quantity})` : ""}`;
+        await addChecklistItem(tx, id, order, label, { ticketItemId: added.id, inventoryItemId: item.inventoryItemId });
+      } else if (body.softwareId) {
+        const softwareId = requiredId(body.softwareId, "Software");
+        const names = await softwareNames(tx, [softwareId]);
+        label = `Grant access: ${names.get(softwareId)}`;
+        await addChecklistItem(tx, id, order, label, { softwareId });
+      } else if (body.seatId || body.ticketItemId) {
+        if (!personId) throw new HttpError(400, "Link the ticket to the person (the For field) first");
+        const only = { seatIds: body.seatId ? [requiredId(body.seatId, "License")] : [], ticketItemIds: body.ticketItemId ? [requiredId(body.ticketItemId, "Item")] : [] };
+        const holdings = await getHoldings(tx, personId);
+        const seat = holdings.seats.find((s) => only.seatIds.includes(s.Id));
+        const held = holdings.items.find((i) => only.ticketItemIds.includes(i.Id));
+        label = seat ? removeSeatLabel(seat) : held ? collectLabel(held) : null;
+        await addRemovalChecklist(tx, id, personId, order, only);
+      } else {
+        throw new HttpError(400, "Say what the line is for");
+      }
+      await recordEvents(tx, id, user.Id, [{ field: "Checklist line added", newValue: label }]);
+    });
+    return { status: 201, jsonBody: { ok: true } };
+  }
+);
+
 endpoint(
   "updateChecklistItem",
   { methods: ["PATCH"], route: "tickets/{id:int}/checklist/{itemId:int}", role: "technician", failMessage: "Could not save the checklist" },
@@ -592,7 +678,7 @@ endpoint(
       });
       if (!item) throw new HttpError(404, "Checklist item not found");
       if (item.IsDone === done) return;
-      const leaving = ticket.ChecklistSource === "offboarding";
+      const leaving = item.IsRemoval;
       const now = done ? "SYSUTCDATETIME()" : "NULL";
 
       if (item.TicketItemId) {

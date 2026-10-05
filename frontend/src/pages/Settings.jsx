@@ -14,6 +14,7 @@ const LISTS = [
   ["inventoryItems", "Inventory items"],
   ["software", "Software"],
   ["billingPeriods", "Billing periods"],
+  ["bookingStatuses", "Booking statuses"],
   ["roles", "Roles"],
   ["userTypes", "User types"]
 ];
@@ -165,21 +166,28 @@ const FIELD_OPTIONS = [
   ["items", "Equipment items"],
   ["forUser", "Who is it for? (a person)"],
   ["software", "Software licenses"],
-  ["newHire", "New hire name and department"]
+  ["newHire", "New hire name and department"],
+  ["removals", "Equipment or software to remove (from what the person holds)"]
 ];
+
+// Category and Subcategory are set for the whole ticket type
+const TYPE_ONLY = ["category", "subcategory"];
 
 function FormFields() {
   const { lookups, reloadLookups } = useApp();
   const [typeId, setTypeId] = useState(lookups.ticketTypes[0]?.Id || "");
+  const [categoryId, setCategoryId] = useState("");
   const [fields, setFields] = useState([]);
+  const categories = lookups.categories.filter((c) => c.TicketTypeId === Number(typeId));
+  const options = categoryId ? FIELD_OPTIONS.filter(([key]) => !TYPE_ONLY.includes(key)) : FIELD_OPTIONS;
 
   useEffect(() => {
     setFields(
       lookups.ticketTypeFields
-        .filter((f) => f.TicketTypeId === Number(typeId))
+        .filter((f) => f.TicketTypeId === Number(typeId) && f.CategoryId === (categoryId ? Number(categoryId) : null))
         .map((f) => ({ fieldKey: f.FieldKey, label: f.Label, isRequired: f.IsRequired, sortOrder: f.SortOrder }))
     );
-  }, [typeId, lookups]);
+  }, [typeId, categoryId, lookups]);
 
   const toggle = (key, label, on) =>
     setFields(on
@@ -189,7 +197,7 @@ function FormFields() {
 
   async function save() {
     try {
-      await api.saveTicketTypeFields(typeId, fields.map((f) => ({ ...f, sortOrder: Number(f.sortOrder) || 0 })));
+      await api.saveTicketTypeFields(typeId, categoryId || undefined, fields.map((f) => ({ ...f, sortOrder: Number(f.sortOrder) || 0 })));
       await reloadLookups();
       alert("Saved");
     } catch (err) {
@@ -199,17 +207,29 @@ function FormFields() {
 
   return (
     <div className="form">
-      <p className="muted">Subject, Description, Priority, CC and Attachments are on every form. Pick the extra fields each ticket type shows.</p>
-      <label>
-        Ticket type
-        <select value={typeId} onChange={(e) => setTypeId(e.target.value)}>
-          {lookups.ticketTypes.map((t) => <option key={t.Id} value={t.Id}>{t.Name}</option>)}
-        </select>
-      </label>
+      <p className="muted">
+        Subject, Description, Priority, CC and Attachments are on every form. Pick the extra fields each ticket type shows,
+        and any extra fields shown only when a category is picked.
+      </p>
+      <div className="row">
+        <label>
+          Ticket type
+          <select value={typeId} onChange={(e) => { setTypeId(e.target.value); setCategoryId(""); }}>
+            {lookups.ticketTypes.map((t) => <option key={t.Id} value={t.Id}>{t.Name}</option>)}
+          </select>
+        </label>
+        <label>
+          Fields for
+          <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
+            <option value="">The whole ticket type</option>
+            {categories.map((c) => <option key={c.Id} value={c.Id}>Only the {c.Name} category</option>)}
+          </select>
+        </label>
+      </div>
       <table className="grid compact">
         <thead><tr><th>Show</th><th>Field</th><th>Label on the form</th><th>Required</th><th>Order</th></tr></thead>
         <tbody>
-          {FIELD_OPTIONS.map(([key, name]) => {
+          {options.map(([key, name]) => {
             const f = fields.find((x) => x.fieldKey === key);
             return (
               <tr key={key}>
@@ -274,6 +294,9 @@ function General() {
           )}
           {m.type === "text" && (
             <input value={values[m.key] ?? ""} onChange={(e) => setValues({ ...values, [m.key]: e.target.value })} />
+          )}
+          {m.type === "longtext" && (
+            <textarea rows={5} maxLength={4000} value={values[m.key] ?? ""} onChange={(e) => setValues({ ...values, [m.key]: e.target.value })} />
           )}
         </label>
       ))}

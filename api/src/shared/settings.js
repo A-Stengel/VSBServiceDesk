@@ -19,7 +19,14 @@ const SETTINGS_META = [
   { key: "CloseBusinessDays", label: "Business days before automatic close", type: "number" },
   { key: "MailboxAddress", label: "Service desk mailbox", type: "text" },
   { key: "ITTeamEmails", label: "IT team notification emails (comma separated)", type: "text" },
-  { key: "MailboxCheckMinutes", label: "Minutes between mailbox checks", type: "number" }
+  { key: "MailboxCheckMinutes", label: "Minutes between mailbox checks", type: "number" },
+  { key: "BookingPendingStatusId", label: "Status for new event bookings", type: "lookup", lookup: "bookingStatuses" },
+  { key: "BookingConfirmedStatusId", label: "Status when an event manager confirms a booking", type: "lookup", lookup: "bookingStatuses" },
+  { key: "BookingDeclinedStatusId", label: "Status when an event manager declines a booking", type: "lookup", lookup: "bookingStatuses" },
+  { key: "BookingCancelledStatusId", label: "Status when a booking is cancelled", type: "lookup", lookup: "bookingStatuses" },
+  { key: "BookingTicketTypeId", label: "Ticket type for a booking's equipment", type: "lookup", lookup: "ticketTypes" },
+  { key: "EventsCalendarAddress", label: "Events calendar address", type: "text" },
+  { key: "EventGuidelines", label: "Event booking guidelines", type: "longtext" }
 ];
 
 let cache;
@@ -49,7 +56,7 @@ async function saveSettings(values) {
     await pool
       .request()
       .input("Key", sql.NVarChar(100), key)
-      .input("Value", sql.NVarChar(1000), value === null || value === undefined ? null : String(value))
+      .input("Value", sql.NVarChar(4000), value === null || value === undefined ? null : String(value))
       .query(`
         UPDATE dbo.Settings SET [Value] = @Value WHERE [Key] = @Key;
         IF @@ROWCOUNT = 0 INSERT INTO dbo.Settings ([Key], [Value]) VALUES (@Key, @Value);

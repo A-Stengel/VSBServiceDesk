@@ -3,6 +3,10 @@ import { api } from "../api.js";
 
 // Type-ahead for picking a person. Technicians search everyone; other staff
 // search active staff only.
+//
+// The pickers sit inside <label>s. The buttons call preventDefault so the
+// label doesn't pass the click on to whichever button replaces them, which
+// undid the pick straight away.
 export default function PersonPicker({ value, onChange, technician, placeholder = "Start typing a name or email" }) {
   const [text, setText] = useState("");
   const [results, setResults] = useState([]);
@@ -23,7 +27,7 @@ export default function PersonPicker({ value, onChange, technician, placeholder 
     return (
       <div className="picked">
         <span>{value.DisplayName} <span className="muted">{value.Email}</span></span>
-        <button type="button" className="link" onClick={() => onChange(null)}>Change</button>
+        <button type="button" className="link" onClick={(e) => { e.preventDefault(); onChange(null); }}>Change</button>
       </div>
     );
   }
@@ -34,7 +38,7 @@ export default function PersonPicker({ value, onChange, technician, placeholder 
         <ul className="picker-results">
           {results.map((p) => (
             <li key={p.Id}>
-              <button type="button" onClick={() => { onChange(p); setText(""); }}>
+              <button type="button" onClick={(e) => { e.preventDefault(); onChange(p); setText(""); }}>
                 {p.DisplayName} <span className="muted">{p.Email}</span>
               </button>
             </li>
