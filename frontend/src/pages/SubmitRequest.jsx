@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { api, money } from "../api.js";
 import { useApp } from "../App.jsx";
 import PersonPicker from "../components/PersonPicker.jsx";
@@ -9,14 +9,49 @@ import ItemsPicker from "../components/ItemsPicker.jsx";
 // fields set up for that type (Settings, Form fields) appear, plus the fields
 // of the category picked (Access & Equipment has its own per category).
 // Subject, Description, Priority, CC and Attachments are on every type.
+//
+// Links can pick the type (?type=support or ?type=access, plus &kind=
+// onboarding, change or offboarding), and the People page opens it prefilled
+// through the navigation state: { prefill: { type, kind, subject,
+// description, person, newHireName } }.
+const TYPE_DESCRIPTIONS = {
+  "Support": "Something is broken or you have a question",
+  "Access & Equipment": "Onboarding, changes, off boarding",
+  "Equipment Rental": "Borrow equipment, book a room, or both"
+};
+
+function startingPoint(lookups, params, state) {
+  const prefill = state?.prefill || {};
+  const typeKey = prefill.type || params.get("type");
+  const byKey = { support: "Support", access: "Access & Equipment" };
+  const type = lookups.ticketTypes.find((t) => String(t.Id) === typeKey || t.Name === byKey[typeKey]);
+  const kind = prefill.kind || params.get("kind");
+  const category = type && kind ? lookups.categories.find((c) => c.TicketTypeId === type.Id && c.ChecklistSource === kind) : null;
+  return {
+    typeId: type ? String(type.Id) : "",
+    form: {
+      subject: prefill.subject || "",
+      description: prefill.description || "",
+      priorityId: lookups.defaults.defaultPriorityId || "",
+      cc: "",
+      categoryId: category ? String(category.Id) : "",
+      newHireName: prefill.newHireName || ""
+    },
+    person: prefill.person || null
+  };
+}
+
 export default function SubmitRequest() {
-  const { me, lookups } = useApp();
+  const { me, lookups, notify } = useApp();
   const navigate = useNavigate();
-  const [typeId, setTypeId] = useState("");
-  const [form, setForm] = useState({ subject: "", description: "", priorityId: lookups.defaults.defaultPriorityId || "", cc: "" });
+  const location = useLocation();
+  const [params] = useSearchParams();
+  const [start] = useState(() => startingPoint(lookups, params, location.state));
+  const [typeId, setTypeId] = useState(start.typeId);
+  const [form, setForm] = useState(start.form);
   const [items, setItems] = useState([]);
   const [softwareIds, setSoftwareIds] = useState([]);
-  const [forUser, setForUser] = useState(null);
+  const [forUser, setForUser] = useState(start.person);
   const [requester, setRequester] = useState(null);
   const [files, setFiles] = useState([]);
   const [available, setAvailable] = useState(null);
@@ -92,7 +127,7 @@ export default function SubmitRequest() {
         requesterId: requester?.Id
       };
       const result = await api.createTicket(data, files);
-      if (result.warnings?.length) alert(`Ticket created. Please note:\n${result.warnings.join("\n")}`);
+      notify([`Ticket ${result.ticket.Number} created.`, ...(result.warnings || [])].join(" "));
       navigate(`/tickets/${result.ticket.Id}`);
     } catch (err) {
       setError(err.message);
@@ -111,20 +146,34 @@ export default function SubmitRequest() {
     }
   }
 
+  const pickType = (t) => {
+    // Equipment Rental and Event Booking share one form
+    if (t.Id === lookups.defaults.bookingTicketTypeId) return navigate("/events/new");
+    setTypeId(String(t.Id));
+    setForm({ ...form, categoryId: "", subcategoryId: "" });
+  };
+
   return (
-    <form className="card form" onSubmit={submit}>
+    <form className="card form" onSubmit={submit} style={{ maxWidth: 820 }}>
       <h1>Submit a request</h1>
 
-      <label>
-        What do you need?
-        <select value={typeId} onChange={(e) => { setTypeId(e.target.value); setForm({ ...form, categoryId: "", subcategoryId: "" }); }} required>
-          <option value="">Choose a request type</option>
-          {lookups.ticketTypes.map((t) => <option key={t.Id} value={t.Id}>{t.Name}</option>)}
-        </select>
-      </label>
+      <fieldset>
+        <legend>What do you need?</legend>
+        <div className="choices">
+          {lookups.ticketTypes.map((t) => (
+            <button type="button" key={t.Id} className={`choice ${String(t.Id) === typeId ? "on" : ""}`} onClick={() => pickType(t)}
+              aria-pressed={String(t.Id) === typeId}>
+              <strong>{t.Id === lookups.defaults.bookingTicketTypeId ? "Equipment Rental / Event Booking" : t.Name}</strong>
+              {TYPE_DESCRIPTIONS[t.Name] && <span className="qd">{TYPE_DESCRIPTIONS[t.Name]}</span>}
+            </button>
+          ))}
+        </div>
+      </fieldset>
 
-      {type && type.Id === lookups.defaults.bookingTicketTypeId && (
-        <p className="muted">Need a conference room as well? <Link to="/events/new">Book an event</Link> instead, and add the equipment there.</p>
+      {type && category?.ChecklistSource === "onboarding" && forUser && !field("forUser") && (
+        <p className="muted small" style={{ margin: 0 }}>
+          This brings back {forUser.DisplayName}&apos;s account. Closing the ticket turns it on again.
+        </p>
       )}
 
       {type && (
@@ -146,8 +195,8 @@ export default function SubmitRequest() {
                   <input placeholder="First name" value={newPerson.firstName} onChange={(e) => setNewPerson({ ...newPerson, firstName: e.target.value })} />
                   <input placeholder="Last name" value={newPerson.lastName} onChange={(e) => setNewPerson({ ...newPerson, lastName: e.target.value })} />
                   <input placeholder="Email" type="email" value={newPerson.email} onChange={(e) => setNewPerson({ ...newPerson, email: e.target.value })} />
-                  <button type="button" onClick={addPerson}>Add</button>
-                  <button type="button" className="link" onClick={() => setNewPerson(null)}>Cancel</button>
+                  <button type="button" className="btn sm" onClick={addPerson}>Add</button>
+                  <button type="button" className="btn sm ghost" onClick={() => setNewPerson(null)}>Cancel</button>
                 </div>
               )}
               <label>
@@ -293,7 +342,9 @@ export default function SubmitRequest() {
           </label>
 
           {error && <p className="error">{error}</p>}
-          <button type="submit" className="primary" disabled={saving}>{saving ? "Submitting…" : "Submit"}</button>
+          <div>
+            <button type="submit" className="btn pri" disabled={saving}>{saving ? "Submitting…" : "Submit"}</button>
+          </div>
         </>
       )}
     </form>

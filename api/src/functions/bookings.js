@@ -14,6 +14,7 @@ const { getConnection, withTransaction, sql } = require("../shared/db");
 const { getSettings, saveSettings } = require("../shared/settings");
 const { bookingWarnings, readItems, addTicketItem } = require("../shared/inventory");
 const { personName, formatNumber, loadTicket, setStatus, recordEvents } = require("../shared/tickets");
+const { logChange } = require("../shared/changelog");
 
 // Event bookings: a room for a meeting, plus any equipment it needs. The
 // booking holds the room and event details and is worked by Event Managers
@@ -73,8 +74,14 @@ function shape(row, user) {
     TicketNumber: row.TicketId ? formatNumber(row.TicketId) : null
   };
   if (!user.IsEventManager) delete booking.HasOverlap;
+  // Event Managers handle the room only and see no equipment information
+  if (!seesEquipment(user, row)) {
+    for (const key of ["TicketId", "TicketNumber", "TicketStatusName", "TicketIsClosed"]) delete booking[key];
+  }
   return booking;
 }
+
+const seesEquipment = (user, booking) => user.IsTechnician || booking.RequesterId === user.Id;
 
 async function loadBooking(db, id) {
   const result = await db.request().input("Id", sql.Int, id).query(`${BOOKING_SELECT} WHERE b.Id = @Id`);
@@ -271,12 +278,12 @@ endpoint("listBookings", { methods: ["GET"], route: "bookings" }, async (request
 endpoint("getBooking", { methods: ["GET"], route: "bookings/{id:int}" }, async (request, context, user) => {
   const pool = await getConnection();
   const booking = await loadVisibleBooking(pool, Number(request.params.id), user);
-  const items = booking.TicketId ? await ticketLines(pool, booking.TicketId) : [];
-  const events = await pool.request().input("Id", sql.Int, booking.Id).query(`
-    SELECT e.Id, e.Field, e.OldValue, e.NewValue, e.[At], ${personName("u")} AS ActorName
+  const items = booking.TicketId && seesEquipment(user, booking) ? await ticketLines(pool, booking.TicketId) : [];
+  const events = await pool.request().input("Id", sql.Int, booking.Id).input("Equipment", sql.Bit, seesEquipment(user, booking)).query(`
+    SELECT e.Id, e.Field, e.OldValue, e.NewValue, e.[At], CASE WHEN u.Id IS NOT NULL THEN ${personName("u")} END AS ActorName
     FROM dbo.BookingEvents e
     LEFT JOIN dbo.Users u ON u.Id = e.ActorId
-    WHERE e.BookingId = @Id
+    WHERE e.BookingId = @Id AND (@Equipment = 1 OR e.Field <> N'Equipment')
     ORDER BY e.[At], e.Id
   `);
   return {
@@ -284,8 +291,8 @@ endpoint("getBooking", { methods: ["GET"], route: "bookings/{id:int}" }, async (
       booking: shape(booking, user),
       items,
       events: events.recordset,
-      // Event Managers see the equipment but can't change it
-      canChangeItems: booking.RequesterId === user.Id || user.IsTechnician
+      // Event Managers don't see or change the equipment
+      canChangeItems: seesEquipment(user, booking)
     }
   };
 });
@@ -574,10 +581,12 @@ endpoint("updateRoom", { methods: ["PATCH"], route: "bookings/rooms/{id:int}", r
 endpoint(
   "saveGuidelines",
   { methods: ["PUT"], route: "bookings/guidelines", role: "eventManager", failMessage: "Could not save the guidelines" },
-  async (request) => {
+  async (request, context, user) => {
     const body = await readJson(request);
     const text = optionalText(body.text, "Guidelines", 4000) || "";
     await saveSettings({ EventGuidelines: text });
+    const pool = await getConnection();
+    await logChange(pool, { area: "settings", section: "guidelines", actorId: user.Id, summary: "Changed the booking guidelines" });
     return { jsonBody: { text } };
   }
 );

@@ -3,6 +3,7 @@ const { HttpError } = require("../shared/errors");
 const { getConnection, withTransaction, sql } = require("../shared/db");
 const { LOOKUPS, FIELD_KEYS, orderBy, columnList } = require("../shared/lookups");
 const { getSettings } = require("../shared/settings");
+const { logChange } = require("../shared/changelog");
 
 // Everything the forms need in one call: the active rows of every lookup, which
 // fields each ticket type (and category) shows, the status/priority ids the
@@ -34,23 +35,55 @@ endpoint("getLookups", { methods: ["GET"], route: "lookups" }, async () => {
         bookingConfirmedStatusId: settings.BookingConfirmedStatusId,
         bookingDeclinedStatusId: settings.BookingDeclinedStatusId,
         bookingCancelledStatusId: settings.BookingCancelledStatusId,
-        bookingTicketTypeId: settings.BookingTicketTypeId
+        bookingTicketTypeId: settings.BookingTicketTypeId,
+        lowStockThreshold: settings.LowStockThreshold ?? 2,
+        staffUserTypeId: settings.StaffUserTypeId,
+        emailSwitch: settings.EmailSwitch || "Off"
       },
       eventGuidelines: settings.EventGuidelines || ""
     }
   };
 });
 
-function getDef(request) {
+// Admins edit every list; Event Managers also edit rooms and room statuses.
+function getDef(request, user) {
   const def = LOOKUPS[request.params.table];
   if (!def) throw new HttpError(404, "Unknown list");
+  if (!user.IsAdmin && !(def.eventManagers && user.IsEventManager)) throw new HttpError(403, "Only admins can do that");
   return def;
+}
+
+const display = (column, value) => {
+  if (value === null || value === undefined || value === "") return "empty";
+  if (column.type === "bit") return value ? "yes" : "no";
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  return String(value);
+};
+
+// A plain sentence for the section's history, like "Renamed Phone to Phones".
+function describeChange(def, before, values) {
+  const name = before.Name || display({}, before.HolidayDate);
+  const parts = [];
+  for (const { column, value } of values) {
+    const old = before[column.name];
+    const same = column.type === "bit" ? !!old === !!value
+      : column.type === "date" ? display(column, old) === display(column, value)
+      : column.type === "decimal" || column.type === "int" || column.type === "ref" ? Number(old) === Number(value) && (old === null) === (value === null)
+      : (old ?? null) === (value ?? null);
+    if (same) continue;
+    if (column.name === "Name") parts.push(`Renamed ${old} to ${value}`);
+    else if (column.name === "IsActive") parts.push(`${value ? "Turned on" : "Turned off"} ${name}`);
+    else if (column.name === "SortOrder") parts.push(`Moved ${name}`);
+    else parts.push(`${name}: ${column.label} ${display(column, old)} to ${display(column, value)}`);
+  }
+  return parts.join("; ");
 }
 
 // Turns request values into typed SQL inputs, checking each against its column.
 function readValues(def, body, isNew) {
   const values = [];
   for (const column of def.columns) {
+    if (column.readOnly) continue;
     if (!(column.name in body)) {
       if (isNew && column.required) throw new HttpError(400, `${column.label} is required`);
       if (isNew && column.default !== undefined) values.push({ column, type: sql.Bit, value: column.default });
@@ -115,8 +148,8 @@ function friendlyError(error) {
   return error;
 }
 
-endpoint("adminListLookup", { methods: ["GET"], route: "manage/lookups/{table}", role: "admin" }, async (request) => {
-  const def = getDef(request);
+endpoint("adminListLookup", { methods: ["GET"], route: "manage/lookups/{table}" }, async (request, context, user) => {
+  const def = getDef(request, user);
   const pool = await getConnection();
   const result = await pool.request().query(`SELECT ${columnList(def)} FROM ${def.table} ORDER BY ${orderBy(def)}`);
   return { jsonBody: { label: def.label, columns: def.columns, rows: result.recordset } };
@@ -124,18 +157,24 @@ endpoint("adminListLookup", { methods: ["GET"], route: "manage/lookups/{table}",
 
 endpoint(
   "adminCreateLookup",
-  { methods: ["POST"], route: "manage/lookups/{table}", role: "admin", failMessage: "Could not add the entry" },
-  async (request) => {
-    const def = getDef(request);
+  { methods: ["POST"], route: "manage/lookups/{table}", failMessage: "Could not add the entry" },
+  async (request, context, user) => {
+    const def = getDef(request, user);
+    if (def.noAdd) throw new HttpError(400, `${def.label} can be renamed but not added to`);
     const values = readValues(def, await readJson(request), true);
-    const pool = await getConnection();
     try {
-      const result = await bind(pool.request(), values).query(`
-        INSERT INTO ${def.table} (${values.map((v) => `[${v.column.name}]`).join(", ")})
-        OUTPUT INSERTED.Id
-        VALUES (${values.map((v, i) => `@v${i}`).join(", ")})
-      `);
-      return { status: 201, jsonBody: { Id: result.recordset[0].Id } };
+      const id = await withTransaction(async (tx) => {
+        const result = await bind(tx.request(), values).query(`
+          INSERT INTO ${def.table} (${values.map((v) => `[${v.column.name}]`).join(", ")})
+          OUTPUT INSERTED.Id
+          VALUES (${values.map((v, i) => `@v${i}`).join(", ")})
+        `);
+        const name = values.find((v) => v.column.name === "Name")?.value;
+        const day = values.find((v) => v.column.name === "HolidayDate")?.value;
+        await logChange(tx, { area: "settings", section: request.params.table, actorId: user.Id, summary: `Added ${[name, day].filter(Boolean).join(", ")}` });
+        return result.recordset[0].Id;
+      });
+      return { status: 201, jsonBody: { Id: id } };
     } catch (error) {
       throw friendlyError(error);
     }
@@ -144,17 +183,26 @@ endpoint(
 
 endpoint(
   "adminUpdateLookup",
-  { methods: ["PATCH"], route: "manage/lookups/{table}/{id:int}", role: "admin", failMessage: "Could not save the entry" },
-  async (request) => {
-    const def = getDef(request);
+  { methods: ["PATCH"], route: "manage/lookups/{table}/{id:int}", failMessage: "Could not save the entry" },
+  async (request, context, user) => {
+    const def = getDef(request, user);
     const values = readValues(def, await readJson(request), false);
     if (!values.length) throw new HttpError(400, "Nothing to change");
-    const pool = await getConnection();
+    const id = Number(request.params.id);
     try {
-      const result = await bind(pool.request(), values)
-        .input("Id", sql.Int, Number(request.params.id))
-        .query(`UPDATE ${def.table} SET ${values.map((v, i) => `[${v.column.name}] = @v${i}`).join(", ")} WHERE Id = @Id`);
-      if (!result.rowsAffected[0]) throw new HttpError(404, "Entry not found");
+      await withTransaction(async (tx) => {
+        const found = await tx.request().input("Id", sql.Int, id).query(`SELECT ${columnList(def)} FROM ${def.table} WHERE Id = @Id`);
+        const before = found.recordset[0];
+        if (!before) throw new HttpError(404, "Entry not found");
+        await bind(tx.request(), values)
+          .input("Id", sql.Int, id)
+          .query(`UPDATE ${def.table} SET ${values.map((v, i) => `[${v.column.name}] = @v${i}`).join(", ")} WHERE Id = @Id`);
+        const summary = describeChange(def, before, values);
+        // Reordering changes two rows; the history only needs the one moved
+        if (summary && !(request.query.get("quiet") === "1")) {
+          await logChange(tx, { area: "settings", section: request.params.table, actorId: user.Id, summary });
+        }
+      });
       return { jsonBody: { ok: true } };
     } catch (error) {
       throw friendlyError(error);
@@ -168,7 +216,7 @@ endpoint(
 endpoint(
   "adminSaveTicketTypeFields",
   { methods: ["PUT"], route: "manage/ticket-type-fields/{typeId:int}", role: "admin", failMessage: "Could not save the form fields" },
-  async (request) => {
+  async (request, context, user) => {
     const typeId = Number(request.params.typeId);
     const categoryRaw = request.query.get("categoryId");
     const categoryId = categoryRaw ? Number(categoryRaw) : null;
@@ -197,6 +245,16 @@ endpoint(
           .query("SELECT 1 AS x FROM dbo.Categories WHERE Id = @Id AND TicketTypeId = @TypeId");
         if (!category.recordset.length) throw new HttpError(400, "That category isn't under this ticket type");
       }
+      const names = await tx.request().input("Id", sql.Int, typeId).input("CategoryId", sql.Int, categoryId).query(`
+        SELECT t.Name AS TypeName, c.Name AS CategoryName FROM dbo.TicketTypes t
+        LEFT JOIN dbo.Categories c ON c.Id = @CategoryId WHERE t.Id = @Id`);
+      const { TypeName, CategoryName } = names.recordset[0];
+      await logChange(tx, {
+        area: "settings",
+        section: "formFields",
+        actorId: user.Id,
+        summary: `Changed the ${TypeName}${CategoryName ? ` (${CategoryName})` : ""} form: ${fields.map((f) => `${f.label}${f.isRequired ? " (required)" : ""}`).join(", ") || "no extra fields"}`
+      });
       await tx.request().input("Id", sql.Int, typeId).input("CategoryId", sql.Int, categoryId)
         .query("DELETE FROM dbo.TicketTypeFields WHERE TicketTypeId = @Id AND (CategoryId = @CategoryId OR (CategoryId IS NULL AND @CategoryId IS NULL))");
       for (const f of fields) {

@@ -1,5 +1,7 @@
 const { sql } = require("./db");
 const { HttpError } = require("./errors");
+const { getHoldings } = require("./holdings");
+const { logChange } = require("./changelog");
 
 const personName = (alias) => `COALESCE(NULLIF(${alias}.DisplayName, ''), CONCAT(${alias}.FirstName, ' ', ${alias}.LastName))`;
 
@@ -13,9 +15,9 @@ const TICKET_SELECT = `
          t.SubcategoryId, sc.Name AS SubcategoryName,
          t.SourceId, so.Name AS SourceName,
          t.RequesterId, ${personName("r")} AS RequesterName, r.Email AS RequesterEmail,
-         t.ForUserId, ${personName("fu")} AS ForUserName,
+         t.ForUserId, CASE WHEN fu.Id IS NOT NULL THEN ${personName("fu")} END AS ForUserName,
          t.ForPersonName, t.ForDepartmentId, fd.Name AS ForDepartmentName,
-         t.TechnicianId, ${personName("te")} AS TechnicianName,
+         t.TechnicianId, CASE WHEN te.Id IS NOT NULL THEN ${personName("te")} END AS TechnicianName,
          t.DepartmentId, d.Name AS DepartmentName,
          t.Subject, t.Description, t.StartDate, t.EndDate,
          t.CreatedAt, t.UpdatedAt, t.WaitingSince, t.ClosedAt, t.LegacyId
@@ -76,8 +78,39 @@ function statusTimingSql(status) {
   ].join(", ");
 }
 
+// Closing an Off Boarding ticket turns the person's account off (they can't
+// sign in any more); closing an Onboarding ticket turns it back on. Both go in
+// the person's history.
+async function accountOnClose(tx, ticket, status, actorId, warnings = []) {
+  if (!status.IsClosed || ticket.IsClosed || !ticket.ForUserId) return;
+  const source = ticket.ChecklistSource;
+  if (source !== "offboarding" && source !== "onboarding") return;
+  const turnOn = source === "onboarding";
+  if (!turnOn && ticket.ForUserId === actorId) {
+    warnings.push("You can't turn off your own account, so it was left on.");
+    return;
+  }
+  const person = (await tx.request().input("Id", sql.Int, ticket.ForUserId).query("SELECT IsActive FROM dbo.Users WHERE Id = @Id")).recordset[0];
+  if (!person || !!person.IsActive === turnOn) return;
+  if (!turnOn) {
+    const held = await getHoldings(tx, ticket.ForUserId);
+    const count = held.items.length + held.seats.length;
+    if (count) warnings.push(`${ticket.ForUserName} still holds ${count} item${count === 1 ? "" : "s"} or seat${count === 1 ? "" : "s"}. Check their page.`);
+  }
+  await tx.request().input("Id", sql.Int, ticket.ForUserId).input("On", sql.Bit, turnOn)
+    .query("UPDATE dbo.Users SET IsActive = @On WHERE Id = @Id");
+  await logChange(tx, {
+    area: "person",
+    entityId: ticket.ForUserId,
+    actorId,
+    summary: `Account turned ${turnOn ? "on" : "off"}: ${turnOn ? "Onboarding" : "Off Boarding"} ${formatNumber(ticket.Id)} closed`
+  });
+}
+
+// Returns any warnings from turning an account on or off.
 async function setStatus(db, ticket, statusId, actorId) {
-  if (statusId === ticket.StatusId) return;
+  const warnings = [];
+  if (statusId === ticket.StatusId) return warnings;
   const status = await getStatus(db, statusId);
   await db
     .request()
@@ -85,6 +118,8 @@ async function setStatus(db, ticket, statusId, actorId) {
     .input("StatusId", sql.Int, statusId)
     .query(`UPDATE dbo.Tickets SET StatusId = @StatusId, UpdatedAt = SYSUTCDATETIME(), ${statusTimingSql(status)} WHERE Id = @Id`);
   await recordEvents(db, ticket.Id, actorId, [{ field: "Status", oldValue: ticket.StatusName, newValue: status.Name }]);
+  await accountOnClose(db, ticket, status, actorId, warnings);
+  return warnings;
 }
 
 // Writes field-change history rows to dbo.TicketEvents.
@@ -115,5 +150,6 @@ module.exports = {
   getStatus,
   statusTimingSql,
   setStatus,
-  recordEvents
+  recordEvents,
+  accountOnClose
 };

@@ -40,6 +40,7 @@ endpoint(
       nextStatusId = settings.RequesterReplyStatusId;
     }
 
+    let warnings = [];
     await withTransaction(async (tx) => {
       const created = await tx
         .request()
@@ -74,11 +75,11 @@ endpoint(
       }
 
       await tx.request().input("Id", sql.Int, id).query("UPDATE dbo.Tickets SET UpdatedAt = SYSUTCDATETIME() WHERE Id = @Id");
-      if (nextStatusId) await setStatus(tx, ticket, nextStatusId, user.Id);
+      if (nextStatusId) warnings = await setStatus(tx, ticket, nextStatusId, user.Id);
     });
 
     // Emailing the reply to the requester (or the technician) comes with the
     // email step of the build; see the README.
-    return { status: 201, jsonBody: { ticket: withNumber(await loadTicket(pool, id)) } };
+    return { status: 201, jsonBody: { ticket: withNumber(await loadTicket(pool, id)), warnings } };
   }
 );

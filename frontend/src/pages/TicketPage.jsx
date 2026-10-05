@@ -19,26 +19,33 @@ export default function TicketPage() {
   if (!data) return <p className="muted">Loading…</p>;
   const { ticket } = data;
 
+  const isTech = me.IsTechnician;
   return (
-    <div className="ticket">
-      <div className="ticket-main">
+    <div className="split">
+      <div>
         <div className="card">
-          <p className="muted">#{ticket.Number} · {ticket.TicketTypeName}{ticket.LegacyId ? ` · imported ${ticket.LegacyId}` : ""}</p>
-          <h1>{ticket.Subject}</h1>
-          <p className="muted">
-            {ticket.RequesterName} ({ticket.RequesterEmail}) · {formatDate(ticket.CreatedAt)} · via {ticket.SourceName}
-          </p>
+          <div className="muted small">
+            #{ticket.Number} · {ticket.TicketTypeName}{ticket.CategoryName ? ` · ${ticket.CategoryName}` : ""}
+            {ticket.LegacyId ? ` · imported ${ticket.LegacyId}` : ""}
+          </div>
+          <h1 style={{ margin: "4px 0 6px" }}>{ticket.Subject}</h1>
+          <div className="row center" style={{ gap: 8, marginBottom: 12 }}>
+            <span className="pill" style={{ background: ticket.StatusColor || undefined }}>{ticket.StatusName}</span>
+            <span className="muted small">
+              {ticket.RequesterName} ({ticket.RequesterEmail}) · {formatDate(ticket.CreatedAt)} · via {ticket.SourceName}
+            </span>
+          </div>
           <div className="body">{ticket.Description}</div>
           <Files attachments={data.attachments.filter((a) => !a.ConversationId)} />
-          {data.cc.length > 0 && <p className="muted">CC: {data.cc.join(", ")}</p>}
+          {data.cc.length > 0 && <p className="muted small">CC: {data.cc.join(", ")}</p>}
         </div>
 
         {data.conversations.map((c) => (
           <div key={c.Id} className={`card message ${c.IsTechnicianNote ? "note" : c.Direction === "out" ? "out" : ""}`}>
-            <p className="muted">
+            <div className="meta">
               <strong>{c.AuthorName}</strong> · {formatDate(c.CreatedAt)}
-              {c.IsTechnicianNote && " · Technician note (requester can't see this)"}
-            </p>
+              {c.IsTechnicianNote && " · Internal note (the requester can't see this)"}
+            </div>
             <div className="body">{c.Body}</div>
             <Files attachments={data.attachments.filter((a) => a.ConversationId === c.Id)} />
           </div>
@@ -47,28 +54,28 @@ export default function TicketPage() {
         <ReplyBox ticket={ticket} onSaved={load} />
       </div>
 
-      <aside className="ticket-side">
-        {me.IsTechnician ? <TechnicianPanel ticket={ticket} onSaved={load} /> : <RequesterPanel ticket={ticket} />}
+      <aside>
+        {isTech ? <TechnicianPanel ticket={ticket} onSaved={load} /> : <RequesterPanel ticket={ticket} />}
         {data.booking && (
           <div className="card">
             <h3>Event booking</h3>
-            <p><Link to={`/events/${data.booking.Id}`}>{data.booking.Title}</Link></p>
-            <p className="muted">
+            <p style={{ margin: 0 }}><Link to={`/events/${data.booking.Id}`}>{data.booking.Title}</Link></p>
+            <p className="muted small" style={{ margin: "4px 0 0" }}>
               {data.booking.RoomName} · {formatWallRange(data.booking.StartAt.slice(0, 16), data.booking.EndAt.slice(0, 16))} · {data.booking.StatusName}
             </p>
           </div>
         )}
         {(ticket.UsesInventory || data.items.length > 0) && <ItemsPanel ticket={ticket} items={data.items} onSaved={load} />}
-        {(data.checklist.length > 0 || (me.IsTechnician && ticket.UsesChecklist)) && (
+        {(data.checklist.length > 0 || (isTech && ticket.UsesChecklist)) && (
           <ChecklistPanel ticket={ticket} checklist={data.checklist} onSaved={load} />
         )}
-        {me.IsTechnician && data.events.length > 0 && (
+        {isTech && data.events.length > 0 && (
           <div className="card">
             <h3>History</h3>
             <ul className="history">
-              {data.events.map((e) => (
+              {[...data.events].reverse().map((e) => (
                 <li key={e.Id}>
-                  <span className="muted">{formatDate(e.At)} · {e.ActorName || "System"}</span>
+                  <span className="muted small">{formatDate(e.At)} · {e.ActorName || "System"}</span>
                   <br />
                   {e.Field}{e.OldValue || e.NewValue ? ": " : ""}
                   {e.OldValue && <s>{e.OldValue}</s>}{e.OldValue && e.NewValue ? " → " : ""}{e.NewValue}
@@ -97,7 +104,7 @@ function Files({ attachments }) {
 }
 
 function ReplyBox({ ticket, onSaved }) {
-  const { me, lookups } = useApp();
+  const { me, lookups, notify } = useApp();
   const [body, setBody] = useState("");
   const [isNote, setIsNote] = useState(false);
   const [statusId, setStatusId] = useState("");
@@ -107,7 +114,7 @@ function ReplyBox({ ticket, onSaved }) {
   const [fileKey, setFileKey] = useState(0);
 
   if (ticket.IsClosed && !me.IsTechnician) {
-    return <div className="card"><p className="muted">This ticket is closed. If you still need help, please submit a new request.</p></div>;
+    return <div className="card"><p className="muted" style={{ margin: 0 }}>This ticket is closed. If you still need help, please submit a new request.</p></div>;
   }
 
   async function send(e) {
@@ -115,11 +122,12 @@ function ReplyBox({ ticket, onSaved }) {
     setSaving(true);
     setError("");
     try {
-      await api.addConversation(ticket.Id, { body, isTechnicianNote: isNote, statusId: statusId || undefined }, files);
+      const result = await api.addConversation(ticket.Id, { body, isTechnicianNote: isNote, statusId: statusId || undefined }, files);
       setBody("");
       setFiles([]);
       setStatusId("");
       setFileKey((k) => k + 1);
+      notify([isNote ? "Note added." : "Reply sent.", ...(result.warnings || [])].join(" "));
       onSaved();
     } catch (err) {
       setError(err.message);
@@ -131,14 +139,14 @@ function ReplyBox({ ticket, onSaved }) {
   return (
     <form className={`card form ${isNote ? "note" : ""}`} onSubmit={send}>
       {me.IsTechnician && (
-        <div className="tabs">
-          <button type="button" className={!isNote ? "active" : ""} onClick={() => setIsNote(false)}>Reply</button>
-          <button type="button" className={isNote ? "active" : ""} onClick={() => setIsNote(true)}>Technician note</button>
+        <div className="composer-tabs">
+          <button type="button" className={`btn sm ${!isNote ? "on" : ""}`} onClick={() => setIsNote(false)}>Public reply</button>
+          <button type="button" className={`btn sm ${isNote ? "on" : ""}`} onClick={() => setIsNote(true)}>Internal note</button>
         </div>
       )}
-      <textarea rows={5} value={body} onChange={(e) => setBody(e.target.value)}
-        placeholder={isNote ? "Internal note, only technicians see this" : "Write a reply"} />
-      <input key={fileKey} type="file" multiple onChange={(e) => setFiles([...e.target.files])} />
+      <textarea rows={5} value={body} onChange={(e) => setBody(e.target.value)} aria-label={isNote ? "Internal note" : "Reply"}
+        placeholder={isNote ? "Internal note, only technicians see this" : me.IsTechnician ? "Write a reply to the requester" : "Write a reply"} />
+      <input key={fileKey} type="file" multiple onChange={(e) => setFiles([...e.target.files])} aria-label="Attach files" />
       {me.IsTechnician && (
         <label>
           Then set status to
@@ -149,19 +157,23 @@ function ReplyBox({ ticket, onSaved }) {
         </label>
       )}
       {error && <p className="error">{error}</p>}
-      <button className="primary" disabled={saving || (!body.trim() && !files.length)}>
-        {saving ? "Sending…" : isNote ? "Add note" : "Send reply"}
-      </button>
+      <div>
+        <button className="btn pri" disabled={saving || (!body.trim() && !files.length)}>
+          {saving ? "Sending…" : isNote ? "Add note" : "Send reply"}
+        </button>
+      </div>
     </form>
   );
 }
 
 function RequesterPanel({ ticket }) {
   const rows = [
+    ["Assigned to", ticket.TechnicianName || "Not yet assigned"],
     ["Status", ticket.StatusName],
     ["Priority", ticket.PriorityName],
-    ["Assigned To", ticket.TechnicianName || "Not yet assigned"],
     ["Category", [ticket.CategoryName, ticket.SubcategoryName].filter(Boolean).join(" / ")],
+    ["Source", ticket.SourceName],
+    ["Created", formatDate(ticket.CreatedAt)],
     ["For", ticket.ForUserName || ticket.ForPersonName],
     ["Start date", formatDay(ticket.StartDate)],
     ["End date", formatDay(ticket.EndDate)]
@@ -178,7 +190,7 @@ function RequesterPanel({ ticket }) {
 }
 
 function TechnicianPanel({ ticket, onSaved }) {
-  const { lookups } = useApp();
+  const { lookups, notify } = useApp();
   const [technicians, setTechnicians] = useState([]);
   const [error, setError] = useState("");
 
@@ -186,14 +198,23 @@ function TechnicianPanel({ ticket, onSaved }) {
     api.users({ technicians: 1 }).then(setTechnicians).catch(() => {});
   }, []);
 
-  async function save(changes) {
+  async function save(changes, message) {
     setError("");
     try {
-      await api.updateTicket(ticket.Id, changes);
+      const result = await api.updateTicket(ticket.Id, changes);
+      const lines = [message, ...(result.warnings || [])].filter(Boolean);
+      if (lines.length) notify(lines.join(" "));
       onSaved();
     } catch (err) {
       setError(err.message);
     }
+  }
+
+  function close() {
+    const held = lookups.defaults.emailSwitch === "On"
+      ? "The survey goes to the requester."
+      : "The survey email is held while outgoing email is off.";
+    save({ statusId: lookups.defaults.closedStatusId }, `Ticket ${ticket.Number} closed. ${held}`);
   }
 
   const select = (label, key, list, value, allowEmpty) => (
@@ -217,8 +238,8 @@ function TechnicianPanel({ ticket, onSaved }) {
 
   return (
     <div className="card form">
+      {select("Assigned to", "technicianId", technicians, ticket.TechnicianId, true)}
       {select("Status", "statusId", lookups.statuses, ticket.StatusId)}
-      {select("Assigned To", "technicianId", technicians, ticket.TechnicianId, true)}
       {select("Priority", "priorityId", lookups.priorities, ticket.PriorityId)}
       <label>
         Type
@@ -257,13 +278,12 @@ function TechnicianPanel({ ticket, onSaved }) {
           </label>
         </div>
       )}
+      <dl className="facts">
+        <div><dt>Created</dt><dd>{formatDate(ticket.CreatedAt)}</dd></div>
+      </dl>
       {error && <p className="error">{error}</p>}
-      {!ticket.IsClosed && (
-        <button type="button" className="primary" onClick={() => save({ statusId: lookups.defaults.closedStatusId })}>
-          Move to Closure
-        </button>
-      )}
-      {ticket.ClosedAt && <p className="muted">Closed {formatDate(ticket.ClosedAt)}</p>}
+      {!ticket.IsClosed && <button type="button" className="btn pri block" onClick={close}>Move to closure</button>}
+      {ticket.ClosedAt && <p className="muted small">Closed {formatDate(ticket.ClosedAt)}</p>}
     </div>
   );
 }
@@ -288,7 +308,7 @@ function ItemsPanel({ ticket, items, onSaved }) {
       <h3>Equipment</h3>
       {!items.length && <p className="muted">No equipment on this ticket.</p>}
       {items.length > 0 && (
-        <table className="grid compact">
+        <table className="tbl compact">
           <thead><tr><th>Item</th><th>Qty</th><th>Cost</th>{me.IsTechnician && <th>Out</th>}{me.IsTechnician && <th>Back</th>}</tr></thead>
           <tbody>
             {items.map((i) => (
@@ -316,7 +336,7 @@ function ItemsPanel({ ticket, items, onSaved }) {
           </select>
           <input type="number" min="1" className="qty" value={adding.quantity}
             onChange={(e) => setAdding({ ...adding, quantity: Math.max(1, parseInt(e.target.value || "1", 10)) })} />
-          <button type="button" disabled={!adding.inventoryItemId}
+          <button type="button" className="btn sm" disabled={!adding.inventoryItemId}
             onClick={() => act(api.addItem(ticket.Id, { inventoryItemId: Number(adding.inventoryItemId), quantity: adding.quantity }))}>
             Add
           </button>
@@ -362,6 +382,8 @@ function ChecklistPanel({ ticket, checklist, onSaved }) {
   return (
     <div className="card">
       <h3>Checklist ({done} of {checklist.length})</h3>
+      {ticket.ChecklistSource === "offboarding" && <p className="muted small">Closing this ticket turns the person's account off.</p>}
+      {ticket.ChecklistSource === "onboarding" && ticket.ForUserId && <p className="muted small">Closing this ticket turns the person's account on.</p>}
       {checklist.map((c) => (
         <label key={c.Id} className="check">
           <input type="checkbox" checked={c.IsDone} disabled={!me.IsTechnician} onChange={(e) => toggle(c, e.target.checked)} />
@@ -388,7 +410,7 @@ function ChecklistPanel({ ticket, checklist, onSaved }) {
               </optgroup>
             )}
           </select>
-          <button type="button" disabled={!adding} onClick={addLine}>Add</button>
+          <button type="button" className="btn sm" disabled={!adding} onClick={addLine}>Add</button>
         </div>
       )}
     </div>

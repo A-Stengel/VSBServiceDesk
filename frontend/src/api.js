@@ -46,6 +46,22 @@ function withFiles(data, files) {
 
 export const api = {
   me: () => request("GET", "me"),
+  home: () => request("GET", "home"),
+  rentals: (filters = {}) => request("GET", "rentals" + query(filters)),
+
+  views: (list) => request("GET", "views" + query({ list })),
+  createView: (data) => request("POST", "views", data),
+  deleteView: (id) => request("DELETE", `views/${id}`),
+  sharedViews: () => request("GET", "manage/shared-views"),
+
+  inventory: () => request("GET", "inventory"),
+  addInventory: (kind, data) => request("POST", `inventory/${kind}`, data),
+  updateInventory: (kind, id, data) => request("PATCH", `inventory/${kind}/${id}`, data),
+  deleteInventory: (kind, id) => request("DELETE", `inventory/${kind}/${id}`),
+
+  person: (id) => request("GET", `users/${id}`),
+  assignHolding: (id, data) => request("POST", `users/${id}/holdings`, data),
+  returnHolding: (id, data) => request("POST", `users/${id}/holdings/return`, data),
 
   bookings: (filters = {}) => request("GET", "bookings" + query(filters)),
   booking: (id) => request("GET", `bookings/${id}`),
@@ -78,7 +94,8 @@ export const api = {
 
   adminLookup: (table) => request("GET", `manage/lookups/${table}`),
   adminCreateLookup: (table, data) => request("POST", `manage/lookups/${table}`, data),
-  adminUpdateLookup: (table, id, data) => request("PATCH", `manage/lookups/${table}/${id}`, data),
+  adminUpdateLookup: (table, id, data, quiet) => request("PATCH", `manage/lookups/${table}/${id}` + query({ quiet: quiet ? 1 : "" }), data),
+  settingsHistory: (section) => request("GET", "manage/history" + query({ section })),
   saveTicketTypeFields: (typeId, categoryId, fields) =>
     request("PUT", `manage/ticket-type-fields/${typeId}` + query({ categoryId }), fields),
   settings: () => request("GET", "manage/settings"),
@@ -113,3 +130,18 @@ export const dayValue = (value) => (value ? String(value).slice(0, 10) : "");
 
 export const money = (value) =>
   Number(value || 0).toLocaleString(undefined, { style: "currency", currency: "USD" });
+
+// "3 minutes ago", "Yesterday", or the date, for activity lists.
+export function timeAgo(value) {
+  if (!value) return "";
+  const then = new Date(value);
+  const minutes = Math.round((Date.now() - then.getTime()) / 60000);
+  if (minutes < 1) return "Just now";
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  const days = Math.round(hours / 24);
+  if (days === 1) return "Yesterday";
+  if (days < 7) return `${days} days ago`;
+  return then.toLocaleDateString(undefined, { dateStyle: "medium" });
+}

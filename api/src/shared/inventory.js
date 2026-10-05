@@ -7,7 +7,8 @@ const { requiredId } = require("./endpoint");
 // An item on a ticket counts as out until a technician marks it returned:
 // - on a ticket with an end date (rentals, bookings) only while its dates
 //   overlap the dates asked about;
-// - on a ticket without an end date (provisioning, onboarding) from then on.
+// - on a ticket without an end date (provisioning, onboarding) from then on;
+// - handed straight to a person from their page (no ticket) from then on.
 // Items on a closed ticket that were never handed out don't count.
 async function getAvailability(db, { startDate, endDate, excludeTicketId } = {}) {
   const today = new Date().toISOString().slice(0, 10);
@@ -24,14 +25,15 @@ async function getAvailability(db, { startDate, endDate, excludeTicketId } = {})
       OUTER APPLY (
         SELECT SUM(ti.Quantity) AS QuantityOut
         FROM dbo.TicketItems ti
-        JOIN dbo.Tickets t ON t.Id = ti.TicketId
-        JOIN dbo.Statuses s ON s.Id = t.StatusId
+        LEFT JOIN dbo.Tickets t ON t.Id = ti.TicketId
+        LEFT JOIN dbo.Statuses s ON s.Id = t.StatusId
         WHERE ti.InventoryItemId = i.Id
           AND ti.ReturnedAt IS NULL
-          AND (@Exclude IS NULL OR t.Id <> @Exclude)
-          AND NOT (s.IsClosed = 1 AND ti.OutAt IS NULL)
-          AND (t.EndDate IS NULL
-               OR (COALESCE(t.StartDate, t.EndDate) <= @End AND t.EndDate >= @Start))
+          AND (ti.TicketId IS NULL OR (
+            (@Exclude IS NULL OR t.Id <> @Exclude)
+            AND NOT (s.IsClosed = 1 AND ti.OutAt IS NULL)
+            AND (t.EndDate IS NULL
+                 OR (COALESCE(t.StartDate, t.EndDate) <= @End AND t.EndDate >= @Start))))
       ) o
       WHERE i.IsActive = 1
       ORDER BY i.SortOrder, i.Name
@@ -68,8 +70,9 @@ function readItems(value) {
   return [...merged].map(([inventoryItemId, quantity]) => ({ inventoryItemId, quantity }));
 }
 
-// Puts an inventory line on a ticket at today's unit cost.
-async function addTicketItem(db, ticketId, inventoryItemId, quantity) {
+// Puts an inventory line on a ticket at today's unit cost. With holderId (and
+// no ticket) it's handed straight to that person and counts as out now.
+async function addTicketItem(db, ticketId, inventoryItemId, quantity, holderId = null) {
   const found = await db.request().input("Id", sql.Int, inventoryItemId)
     .query("SELECT Id, Name, UnitCost FROM dbo.InventoryItems WHERE Id = @Id AND IsActive = 1");
   const item = found.recordset[0];
@@ -80,10 +83,11 @@ async function addTicketItem(db, ticketId, inventoryItemId, quantity) {
     .input("ItemId", sql.Int, inventoryItemId)
     .input("Quantity", sql.Int, quantity)
     .input("UnitCost", sql.Decimal(10, 2), item.UnitCost)
+    .input("HolderId", sql.Int, holderId)
     .query(`
-      INSERT INTO dbo.TicketItems (TicketId, InventoryItemId, Quantity, UnitCostAtTime)
+      INSERT INTO dbo.TicketItems (TicketId, InventoryItemId, Quantity, UnitCostAtTime, HolderId, OutAt)
       OUTPUT INSERTED.Id
-      VALUES (@TicketId, @ItemId, @Quantity, @UnitCost)
+      VALUES (@TicketId, @ItemId, @Quantity, @UnitCost, @HolderId, CASE WHEN @HolderId IS NULL THEN NULL ELSE SYSUTCDATETIME() END)
     `);
   return { id: row.recordset[0].Id, name: item.Name };
 }
