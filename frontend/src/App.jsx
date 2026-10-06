@@ -4,6 +4,7 @@ import { api, isSignedIn } from "./api.js";
 import Icon from "./components/Icon.jsx";
 import Logo, { updateTabIcon } from "./components/Logo.jsx";
 import LoadingScreen, { ATTEMPTS } from "./components/LoadingScreen.jsx";
+import { MODE_NAMES, getAppearance, onAppearanceChange, setAppearance } from "./theme.js";
 import Home from "./pages/Home.jsx";
 import SubmitRequest from "./pages/SubmitRequest.jsx";
 import Tickets from "./pages/Tickets.jsx";
@@ -124,6 +125,7 @@ function SignedInHeader({ me }) {
             {open && (
               <div className="card menu">
                 <div className="who">{me.Email}<br />{me.RoleName}</div>
+                <ModePicker />
                 <a className="btn ghost sm" href="/logout">Sign out</a>
               </div>
             )}
@@ -131,6 +133,39 @@ function SignedInHeader({ me }) {
         </div>
       </div>
     </header>
+  );
+}
+
+// Light, Dark or Match device, for this person only. It changes the page
+// straight away and then saves to their account so it follows them to other
+// computers.
+function ModePicker() {
+  const [mode, setMode] = useState(getAppearance().mode);
+  const [note, setNote] = useState("");
+  useEffect(() => onAppearanceChange((state) => setMode(state.mode)), []);
+
+  async function pick(next) {
+    setAppearance({ mode: next });
+    setNote("");
+    try {
+      await api.saveMyAppearance(next);
+    } catch (err) {
+      setNote(err.message);
+    }
+  }
+
+  return (
+    <div className="mode-picker">
+      <div className="lbl" id="mode-label">Appearance</div>
+      <div className="seg" role="group" aria-labelledby="mode-label">
+        {Object.entries(MODE_NAMES).map(([value, name]) => (
+          <button key={value} type="button" className={mode === value ? "on" : ""} aria-pressed={mode === value} onClick={() => pick(value)}>
+            {name}
+          </button>
+        ))}
+      </div>
+      {note && <div className="muted small">{note}</div>}
+    </div>
   );
 }
 
@@ -243,6 +278,9 @@ export default function App() {
       if (!current()) return;
       setMe(user);
       setLookups(lists);
+      // The saved colors and this person's mode. If it fails the site keeps
+      // the last ones this browser saw.
+      api.appearance().then(setAppearance).catch(() => {});
     } catch (error) {
       show({ step, attempt: ATTEMPTS, since: Date.now(), retryIn: 0, wait: 0, failed: { message: error.message, gaveUp: !!error.gaveUp } });
     }
