@@ -365,3 +365,20 @@ rows.
 Roles come from the Roles list. A role with Technician ticked gives
 technician access, Admin ticked gives both, and Event Manager ticked gives
 event booking access.
+
+### Delete the retired ticket types (script 10)
+
+Run `10_delete_retired_ticket_types.sql` once to remove the four ticket types
+that script 08 turned off: Event Booking, Equipment Provisioning, Onboarding
+and Offboarding. They only hold test data. In plain terms it:
+
+- Deletes those four types with their categories, subcategories and form
+  fields, and their test tickets with each ticket's replies, notes,
+  attachment records, CCs, equipment lines, checklist, survey and history.
+- Keeps license seats, event bookings and inbound emails that pointed at one
+  of those tickets, and just unlinks them.
+- Leaves Support, Access & Equipment and Equipment Rental alone.
+
+It runs as one transaction, so nothing changes if any part fails. Set
+`@PreviewOnly = 1` at the top to see the counts first. No API publish is
+needed.
