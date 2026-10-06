@@ -3,6 +3,9 @@ import { useSearchParams } from "react-router-dom";
 import { api, formatDate } from "../api.js";
 import { useApp } from "../App.jsx";
 import Logo, { logoChanged } from "../components/Logo.jsx";
+import {
+  COLOR_FIELDS, DEFAULT_COLORS, colorsFor, isColor, readabilityProblems, setAppearance, themeVars
+} from "../theme.js";
 
 // Settings, grouped down the left. Lists can be added to, renamed,
 // reordered and turned off or on, never deleted, because old tickets point
@@ -35,6 +38,7 @@ const SECTIONS = [
   { key: "lowStock", label: "Low-stock warning", history: "lowStock" },
   { key: "sharedViews", label: "Shared views" },
   { group: "System" },
+  { key: "appearance", label: "Appearance", history: "appearance" },
   { key: "logo", label: "Logo", history: "logo" },
   { key: "roles", label: "Roles", table: "roles" },
   { key: "userTypes", label: "Account types", table: "userTypes" },
@@ -57,6 +61,7 @@ const DESCRIPTIONS = {
   roles: "What someone can do comes from the Technician, Admin and Event manager ticks.",
   userTypes: "Staff sign in; outside people and shared mailboxes only email in.",
   billingPeriods: "How often a license is billed, for the monthly cost on the Inventory page.",
+  appearance: "The colors for light mode and dark mode. Everyone picks Light, Dark or Match device from the menu under their name.",
   logo: "Shown in the header, on the loading screen and in the browser tab. A square PNG with a transparent background looks best."
 };
 
@@ -133,6 +138,8 @@ function Section({ section, onChange }) {
       return <SettingsForm keys={["LowStockThreshold"]} onChange={onChange} note="On the Inventory page, Available turns orange at or below this number." />;
     case "sharedViews":
       return <SharedViews />;
+    case "appearance":
+      return <AppearanceSettings onChange={onChange} />;
     case "logo":
       return <LogoSettings onChange={onChange} />;
     case "advanced":
@@ -140,6 +147,130 @@ function Section({ section, onChange }) {
     default:
       return <LookupList table={section.table} onChange={onChange} />;
   }
+}
+
+const MODE_TABS = [["light", "Light mode colors"], ["dark", "Dark mode colors"]];
+const sameColors = (a, b) => COLOR_FIELDS.every((f) => a[f.key] === b[f.key]);
+
+// The seven colors for each mode, with a preview of the unsaved colors and a
+// readability check. Saving the built-in colors stores nothing for that mode.
+function AppearanceSettings({ onChange }) {
+  const { notify } = useApp();
+  const [saved, setSaved] = useState(() => ({ light: colorsFor("light"), dark: colorsFor("dark") }));
+  const [draft, setDraft] = useState(saved);
+  const [typed, setTyped] = useState({});
+  const [tab, setTab] = useState("light");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api.appearance().then((data) => {
+      setAppearance(data);
+      const fresh = { light: colorsFor("light", data), dark: colorsFor("dark", data) };
+      setSaved(fresh);
+      setDraft(fresh);
+    }).catch(() => {});
+  }, []);
+
+  const colors = draft[tab];
+  const problems = readabilityProblems(colors);
+  const changed = MODE_TABS.filter(([mode]) => !sameColors(draft[mode], saved[mode])).map(([mode]) => mode);
+
+  function setColor(key, value) {
+    setDraft((d) => ({ ...d, [tab]: { ...d[tab], [key]: value } }));
+  }
+
+  async function save() {
+    const body = {};
+    for (const mode of changed) body[mode] = sameColors(draft[mode], DEFAULT_COLORS[mode]) ? null : draft[mode];
+    setBusy(true);
+    try {
+      const data = await api.saveAppearance(body);
+      setAppearance({ light: data.light, dark: data.dark });
+      const fresh = { light: colorsFor("light", data), dark: colorsFor("dark", data) };
+      setSaved(fresh);
+      setDraft(fresh);
+      const hard = changed.some((mode) => readabilityProblems(draft[mode]).length);
+      notify(`Colors saved. Everyone sees them the next time a page loads.${hard ? " Some text may be hard to read." : ""}`, hard);
+      onChange();
+    } catch (err) {
+      notify(err.message, true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="form">
+      <div className="tabs" role="tablist" style={{ marginTop: 0 }}>
+        {MODE_TABS.map(([mode, label]) => (
+          <button key={mode} type="button" role="tab" aria-selected={tab === mode} className={`tab ${tab === mode ? "on" : ""}`}
+            onClick={() => { setTab(mode); setTyped({}); }}>
+            {label}{changed.includes(mode) ? " •" : ""}
+          </button>
+        ))}
+      </div>
+      <div className="appearance">
+        <div className="color-fields">
+          {COLOR_FIELDS.map((f) => (
+            <div key={f.key} className="color-field">
+              <input type="color" id={`color-${f.key}`} aria-label={`${f.name} color`} value={colors[f.key]}
+                onChange={(e) => { setColor(f.key, e.target.value.toLowerCase()); setTyped((t) => ({ ...t, [f.key]: undefined })); }} />
+              <label className="name" htmlFor={`hex-${f.key}`}>{f.name}<small>{f.hint}</small></label>
+              <input type="text" id={`hex-${f.key}`} maxLength={7} spellCheck={false} value={typed[f.key] ?? colors[f.key]}
+                onChange={(e) => {
+                  const value = e.target.value.trim().toLowerCase();
+                  setTyped((t) => ({ ...t, [f.key]: e.target.value }));
+                  const hex = value.startsWith("#") ? value : `#${value}`;
+                  if (isColor(hex)) setColor(f.key, hex);
+                }}
+                onBlur={() => setTyped((t) => ({ ...t, [f.key]: undefined }))} />
+            </div>
+          ))}
+        </div>
+        <div className="stack" style={{ minWidth: 0 }}>
+          <div className="preview" style={themeVars(colors, tab)} aria-label={`Preview of ${tab} mode`}>
+            <div className="topbar"><span>VSB Service Desk</span><span className="btn submit sm">Submit a request</span></div>
+            <div className="preview-body">
+              <div className="card">
+                <h3>Ticket 0010042</h3>
+                <p className="muted small" style={{ margin: "0 0 10px" }}>VPN will not connect from home</p>
+                <div className="row center" style={{ gap: 8 }}>
+                  <span className="btn pri sm">Send reply</span>
+                  <span className="btn sm">Add note</span>
+                  <span className="link small">View history</span>
+                </div>
+              </div>
+              <div className="card flush scroll">
+                <table className="tbl compact">
+                  <thead><tr><th>#</th><th>Subject</th><th>Status</th></tr></thead>
+                  <tbody>
+                    <tr><td>0010042</td><td><span className="link">VPN will not connect</span></td><td><span className="pill">Open</span></td></tr>
+                    <tr><td>0010039</td><td><span className="link">New hire setup</span></td><td><span className="pill">Waiting</span></td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          <div className={`readable ${problems.length ? "poor" : "good"}`} role="status">
+            {problems.length
+              ? <><strong>Some text will be hard to read:</strong><ul>{problems.map((p) => <li key={p}>{p}</li>)}</ul></>
+              : "Easy to read: every text color passes the accessibility contrast check."}
+          </div>
+        </div>
+      </div>
+      <div className="row center" style={{ justifyContent: "space-between" }}>
+        <span className="muted small">{changed.length ? `Unsaved changes in ${changed.map((m) => (m === "light" ? "light" : "dark")).join(" and ")} mode` : "No changes"}</span>
+        <div className="row center" style={{ gap: 8 }}>
+          <button type="button" className="btn sm" disabled={busy || sameColors(draft[tab], DEFAULT_COLORS[tab])}
+            onClick={() => { setDraft((d) => ({ ...d, [tab]: { ...DEFAULT_COLORS[tab] } })); setTyped({}); }}>
+            Reset {tab} mode to defaults
+          </button>
+          <button type="button" className="btn sm" disabled={busy || !changed.length} onClick={() => { setDraft(saved); setTyped({}); }}>Discard</button>
+          <button type="button" className="btn pri sm" disabled={busy || !changed.length} onClick={save}>Save</button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function LogoSettings({ onChange }) {
@@ -338,7 +469,7 @@ function LookupList({ table, fixed = {}, filter = () => true, hide = [], onChang
               )}
             </div>
             {editing?.Id === r.Id && (
-              <form className="card form" style={{ margin: "4px 0 12px", background: "#fafbf9" }} onSubmit={saveEdit}>
+              <form className="card form" style={{ margin: "4px 0 12px", background: "var(--thead)" }} onSubmit={saveEdit}>
                 <div className="row">
                   {data.columns.filter((c) => !c.readOnly && !hide.includes(c.name) && c.name !== "IsActive" && c.name !== "SortOrder").map((c) => (
                     <label key={c.name} className={c.type === "bit" ? "check" : ""}>
@@ -363,7 +494,7 @@ function LookupList({ table, fixed = {}, filter = () => true, hide = [], onChang
         </button>
       )}
       {adding && (
-        <form className="card form" style={{ marginTop: 12, background: "#fafbf9" }} onSubmit={add}>
+        <form className="card form" style={{ marginTop: 12, background: "var(--thead)" }} onSubmit={add}>
           <div className="row">
             {data.columns.filter((c) => !c.readOnly && !hide.includes(c.name) && c.name !== "SortOrder" && c.name !== "IsActive" && !(c.name in fixed)).map((c) => (
               <label key={c.name} className={c.type === "bit" ? "check" : ""}>

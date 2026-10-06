@@ -109,7 +109,10 @@ export const api = {
   settings: () => request("GET", "manage/settings"),
   saveSettings: (values) => request("PUT", "manage/settings", values),
   uploadLogo: (file) => request("PUT", "manage/logo", withFiles({}, [file])),
-  resetLogo: () => request("DELETE", "manage/logo")
+  resetLogo: () => request("DELETE", "manage/logo"),
+  appearance: () => request("GET", "appearance"),
+  saveMyAppearance: (mode) => request("PUT", "me/appearance", { mode }),
+  saveAppearance: (colors) => request("PUT", "manage/appearance", colors)
 };
 
 export function formatDate(value) {
