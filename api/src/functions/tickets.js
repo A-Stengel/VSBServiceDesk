@@ -16,7 +16,7 @@ const { getConnection, withTransaction, sql } = require("../shared/db");
 const { getSettings } = require("../shared/settings");
 const { USER_SELECT } = require("../shared/auth");
 const { uploadFile } = require("../shared/storage");
-const { getAvailability, bookingWarnings, readItems, addTicketItem } = require("../shared/inventory");
+const { getAvailability, assertStock, assertTicketStock, assertSeats, readItems, addTicketItem } = require("../shared/inventory");
 const { getHoldings } = require("../shared/holdings");
 const { logChange } = require("../shared/changelog");
 const {
@@ -289,7 +289,7 @@ endpoint(
     if (!requester || !requester.IsActive) throw new HttpError(400, "That requester doesn't exist");
     if (checklistSource === "offboarding" && !forUserId) throw new HttpError(400, "Pick who is leaving");
 
-    const warnings = await bookingWarnings(pool, items, { startDate, endDate });
+    const warnings = [];
     const statusId = technicianId && settings.AssignedStatusId ? settings.AssignedStatusId : settings.NewStatusId;
 
     let ticketId;
@@ -538,6 +538,9 @@ endpoint(
         });
       }
       await recordEvents(tx, id, user.Id, events);
+      // New dates, or reopening, can need equipment that's already taken.
+      const reopened = changes.StatusId && ticket.IsClosed && !(await getStatus(tx, changes.StatusId.value)).IsClosed;
+      if (changes.StartDate || changes.EndDate || reopened) await assertTicketStock(tx, id);
       if (changes.StatusId) await accountOnClose(tx, ticket, await getStatus(tx, changes.StatusId.value), user.Id, warnings);
     });
 
@@ -572,7 +575,7 @@ endpoint(
     const pool = await getConnection();
     const ticket = await loadTicket(pool, id);
     if (!ticket) throw new HttpError(404, "Ticket not found");
-    const warnings = await bookingWarnings(pool, [item], { startDate: ticket.StartDate, endDate: ticket.EndDate, excludeTicketId: id });
+    const warnings = [];
     await withTransaction(async (tx) => {
       const added = await addTicketItem(tx, id, item.inventoryItemId, item.quantity);
       await recordEvents(tx, id, user.Id, [{ field: "Item added", newValue: `${added.name} x${item.quantity}` }]);
@@ -595,10 +598,11 @@ endpoint(
     if (!sets.length) throw new HttpError(400, "Nothing to change");
     await withTransaction(async (tx) => {
       const item = await one(tx, `
-        SELECT i.Name FROM dbo.TicketItems ti JOIN dbo.InventoryItems i ON i.Id = ti.InventoryItemId
+        SELECT i.Name, ti.InventoryItemId FROM dbo.TicketItems ti JOIN dbo.InventoryItems i ON i.Id = ti.InventoryItemId
         WHERE ti.Id = @ItemId AND ti.TicketId = @Id`, { Id: [sql.Int, id], ItemId: [sql.Int, itemId] });
       if (!item) throw new HttpError(404, "Item not found on this ticket");
       await tx.request().input("ItemId", sql.Int, itemId).query(`UPDATE dbo.TicketItems SET ${sets.join(", ")} WHERE Id = @ItemId`);
+      if (body.out || body.returned === false) await assertStock(tx, [item.InventoryItemId]);
       const events = [];
       if ("out" in body) events.push({ field: body.out ? "Item handed out" : "Item not handed out", newValue: item.Name });
       if ("returned" in body) events.push({ field: body.returned ? "Item returned" : "Item not returned", newValue: item.Name });
@@ -683,6 +687,11 @@ endpoint(
         const column = leaving ? "ReturnedAt" : "OutAt";
         await tx.request().input("TicketItemId", sql.Int, item.TicketItemId)
           .query(`UPDATE dbo.TicketItems SET ${column} = ${now} WHERE Id = @TicketItemId`);
+        // Un-collecting, or handing out on a closed ticket, puts it back in use
+        if (leaving !== done) {
+          const line = await one(tx, "SELECT InventoryItemId FROM dbo.TicketItems WHERE Id = @Id", { Id: [sql.Int, item.TicketItemId] });
+          await assertStock(tx, [line?.InventoryItemId]);
+        }
       }
 
       if (leaving && item.LicenseAssignmentId) {
@@ -690,6 +699,10 @@ endpoint(
           .input("SeatId", sql.Int, item.LicenseAssignmentId)
           .input("TicketId", sql.Int, done ? id : null)
           .query(`UPDATE dbo.LicenseAssignments SET RemovedAt = ${now}, RemovedTicketId = @TicketId WHERE Id = @SeatId`);
+        if (!done) {
+          const seat = await one(tx, "SELECT SoftwareId FROM dbo.LicenseAssignments WHERE Id = @Id", { Id: [sql.Int, item.LicenseAssignmentId] });
+          await assertSeats(tx, [seat?.SoftwareId]);
+        }
       }
 
       let seatId = item.LicenseAssignmentId;
@@ -706,6 +719,7 @@ endpoint(
             TicketId: [sql.Int, id]
           });
           seatId = seat.Id;
+          await assertSeats(tx, [item.SoftwareId]);
         } else if (item.LicenseAssignmentId) {
           await tx.request().input("ItemId", sql.Int, itemId).query("UPDATE dbo.ChecklistItems SET LicenseAssignmentId = NULL WHERE Id = @ItemId");
           await tx.request().input("SeatId", sql.Int, item.LicenseAssignmentId).query("DELETE FROM dbo.LicenseAssignments WHERE Id = @SeatId");
