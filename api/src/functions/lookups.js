@@ -8,12 +8,19 @@ const { logChange } = require("../shared/changelog");
 // Everything the forms need in one call: the active rows of every lookup, which
 // fields each ticket type (and category) shows, the status/priority ids the
 // screens use, and the event booking guidelines.
-endpoint("getLookups", { methods: ["GET"], route: "lookups" }, async () => {
+// Prices are for technicians only, so everyone else gets the lists without
+// costs.
+const PRICE_COLUMNS = { inventoryItems: ["UnitCost"], software: ["CostPerSeat"] };
+
+endpoint("getLookups", { methods: ["GET"], route: "lookups" }, async (request, context, user) => {
   const pool = await getConnection();
   const lookups = {};
   for (const [key, def] of Object.entries(LOOKUPS)) {
     const result = await pool.request().query(`SELECT ${columnList(def)} FROM ${def.table} WHERE IsActive = 1 ORDER BY ${orderBy(def)}`);
     lookups[key] = result.recordset;
+    if (!user.IsTechnician && PRICE_COLUMNS[key]) {
+      for (const row of lookups[key]) for (const column of PRICE_COLUMNS[key]) delete row[column];
+    }
   }
   const fields = await pool.request().query(`
     SELECT TicketTypeId, CategoryId, FieldKey, Label, IsRequired, SortOrder

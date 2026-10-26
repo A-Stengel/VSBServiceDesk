@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
-import { api, money } from "../api.js";
+import { api, money, perPeriod } from "../api.js";
 import { useApp } from "../App.jsx";
 import PersonPicker from "../components/PersonPicker.jsx";
 import ItemsPicker from "../components/ItemsPicker.jsx";
@@ -277,7 +277,7 @@ export default function SubmitRequest() {
             <fieldset>
               <legend>{field("items")?.Label || "Equipment"}</legend>
               <ItemsPicker inventory={lookups.inventoryItems} value={items} onChange={setItems} available={available} />
-              {itemsTotal > 0 && <p className="muted">Equipment cost (tracking only): {money(itemsTotal)}</p>}
+              {me.IsTechnician && itemsTotal > 0 && <p className="muted">Equipment cost (tracking only): {money(itemsTotal)}</p>}
             </fieldset>
           )}
 
@@ -312,7 +312,10 @@ export default function SubmitRequest() {
                 <label key={s.Id} className="check">
                   <input type="checkbox" checked={softwareIds.includes(s.Id)}
                     onChange={(e) => setSoftwareIds(e.target.checked ? [...softwareIds, s.Id] : softwareIds.filter((x) => x !== s.Id))} />
-                  {s.Name} <span className="muted">{money(s.CostPerSeat)} per seat</span>
+                  {s.Name}
+                  {me.IsTechnician && (
+                    <span className="muted">{money(s.CostPerSeat)} per seat {perPeriod(lookups.billingPeriods.find((b) => b.Id === s.BillingPeriodId))}</span>
+                  )}
                 </label>
               ))}
             </fieldset>

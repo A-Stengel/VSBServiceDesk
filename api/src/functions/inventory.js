@@ -161,7 +161,7 @@ endpoint(
   }
 );
 
-// Body: any of { name, count, cost, isActive }
+// Body: any of { name, count, cost, isActive } and, for licenses, billingPeriodId
 endpoint(
   "updateInventory",
   { methods: ["PATCH"], route: "inventory/{kind}/{id:int}", role: "technician", failMessage: "Could not save it" },
@@ -202,6 +202,22 @@ endpoint(
             sets.push(`${kind.cost.column} = @Cost`);
             req.input("Cost", sql.Decimal(10, 2), cost);
             notes.push(`${before.Name}: ${kind.cost.label.toLowerCase()} ${money(before.Cost)} to ${money(cost)}`);
+          }
+        }
+        if (kind === KINDS.licenses && "billingPeriodId" in body) {
+          const periodId = optionalId(body.billingPeriodId, "Billing period");
+          if (!periodId) throw new HttpError(400, "Pick how often it's billed");
+          const periods = await tx.request().input("Id", sql.Int, id).input("PeriodId", sql.Int, periodId).query(`
+            SELECT (SELECT b.Name FROM dbo.Software s JOIN dbo.BillingPeriods b ON b.Id = s.BillingPeriodId WHERE s.Id = @Id) AS Was,
+                   (SELECT Name FROM dbo.BillingPeriods WHERE Id = @PeriodId AND IsActive = 1) AS Now,
+                   (SELECT BillingPeriodId FROM dbo.Software WHERE Id = @Id) AS WasId
+          `);
+          const { Was, Now, WasId } = periods.recordset[0];
+          if (!Now) throw new HttpError(400, "That billing period isn't available");
+          if (WasId !== periodId) {
+            sets.push("BillingPeriodId = @PeriodId");
+            req.input("PeriodId", sql.Int, periodId);
+            notes.push(`${before.Name}: billed ${String(Was).toLowerCase()} to ${Now.toLowerCase()}`);
           }
         }
         if ("isActive" in body && !!body.isActive !== before.IsActive) {

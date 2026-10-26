@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { api, formatDate, money } from "../api.js";
+import { api, formatDate, money, perPeriod } from "../api.js";
 import { useApp } from "../App.jsx";
 
 // Inventory: equipment and software licenses. Any technician can add items,
@@ -100,18 +100,39 @@ function Cost({ value, label, onSave }) {
   );
 }
 
+// How often a license is billed: per month or per year.
+function BillingPicker({ value, label, onChange, style }) {
+  const { lookups } = useApp();
+  return (
+    <select value={value || ""} aria-label={label} onChange={(e) => onChange(Number(e.target.value))} style={style}>
+      {lookups.billingPeriods.map((b) => <option key={b.Id} value={b.Id}>{perPeriod(b)}</option>)}
+    </select>
+  );
+}
+
 function AddRow({ kind, countLabel, costLabel, run }) {
-  const [row, setRow] = useState({ name: "", count: "1", cost: "" });
+  const { lookups } = useApp();
+  const licenses = kind === "licenses";
+  const blank = () => ({ name: "", count: "1", cost: "", billingPeriodId: lookups.billingPeriods[0]?.Id || "" });
+  const [row, setRow] = useState(blank);
   async function add(e) {
     e.preventDefault();
-    const ok = await run(api.addInventory(kind, { name: row.name, count: Number(row.count || 0), cost: Number(row.cost || 0) }), `Added ${row.name.trim()}.`);
-    if (ok) setRow({ name: "", count: "1", cost: "" });
+    const body = { name: row.name, count: Number(row.count || 0), cost: Number(row.cost || 0) };
+    if (licenses && row.billingPeriodId) body.billingPeriodId = Number(row.billingPeriodId);
+    const ok = await run(api.addInventory(kind, body), `Added ${row.name.trim()}.`);
+    if (ok) setRow(blank());
   }
   return (
     <form className="row" onSubmit={add} style={{ padding: 14, borderTop: "1px solid var(--line)" }}>
       <label className="field" style={{ flex: "2 1 220px" }}>Name<input value={row.name} maxLength={150} onChange={(e) => setRow({ ...row, name: e.target.value })} required /></label>
       <label className="field" style={{ flex: "1 1 120px" }}>{countLabel}<input type="number" min="0" value={row.count} onChange={(e) => setRow({ ...row, count: e.target.value })} required /></label>
       <label className="field" style={{ flex: "1 1 120px" }}>{costLabel}<input type="number" min="0" step="0.01" value={row.cost} placeholder="0.00" onChange={(e) => setRow({ ...row, cost: e.target.value })} /></label>
+      {licenses && (
+        <label className="field" style={{ flex: "1 1 140px" }}>
+          Billed
+          <BillingPicker value={row.billingPeriodId} onChange={(id) => setRow({ ...row, billingPeriodId: id })} />
+        </label>
+      )}
       <button className="btn pri" disabled={!row.name.trim()}>Add</button>
     </form>
   );
@@ -168,11 +189,17 @@ function Licenses({ rows, run }) {
               <tr key={r.Id}>
                 <td>
                   <strong>{r.Name}</strong>
-                  <div className="muted small">Billed {r.BillingPeriodName.toLowerCase()}{!r.IsActive ? " · turned off" : ""}</div>
+                  {!r.IsActive && <div className="muted small">Turned off</div>}
                 </td>
                 <td className="num" style={r.SeatsUsed > r.SeatsPurchased ? { color: "var(--error)", fontWeight: 600 } : undefined}>{r.SeatsUsed}</td>
                 <td><Stepper value={r.SeatsPurchased} min={r.SeatsUsed} label={`${r.Name} seats owned`} onSave={(n) => update(r, { count: n }, `${r.Name}: ${n} seats owned.`)} /></td>
-                <td><Cost value={r.CostPerSeat} label={`${r.Name} cost per seat`} onSave={(n) => update(r, { cost: n }, `${r.Name}: cost updated.`)} /></td>
+                <td>
+                  <span className="row center" style={{ gap: 8, flexWrap: "nowrap" }}>
+                    <Cost value={r.CostPerSeat} label={`${r.Name} cost per seat`} onSave={(n) => update(r, { cost: n }, `${r.Name}: cost updated.`)} />
+                    <BillingPicker value={r.BillingPeriodId} label={`${r.Name} billed`} style={{ width: "auto", minHeight: 32, padding: "4px 8px" }}
+                      onChange={(id) => update(r, { billingPeriodId: id }, `${r.Name}: billing updated.`)} />
+                  </span>
+                </td>
                 <td className="num">{money(r.MonthlyCost)}</td>
                 <td>
                   {r.SeatsUsed > 0

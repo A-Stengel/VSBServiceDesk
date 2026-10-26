@@ -1,8 +1,12 @@
 import { money } from "../api.js";
+import { useApp } from "../App.jsx";
 
 // Pick inventory items and quantities. "available" (optional) is the
 // availability list for the chosen dates, used to warn about double-booking.
+// Only technicians see what things cost.
 export default function ItemsPicker({ inventory, value, onChange, available }) {
+  const { me } = useApp();
+  const showCost = !!me.IsTechnician;
   const quantityOf = (id) => value.find((v) => v.inventoryItemId === id)?.quantity || 0;
   const set = (id, quantity) => {
     const rest = value.filter((v) => v.inventoryItemId !== id);
@@ -12,7 +16,7 @@ export default function ItemsPicker({ inventory, value, onChange, available }) {
   return (
     <table className="tbl compact">
       <thead>
-        <tr><th>Item</th><th>Cost each</th>{available && <th>Free</th>}<th>Quantity</th></tr>
+        <tr><th>Item</th>{showCost && <th>Cost each</th>}{available && <th>Free</th>}<th>Quantity</th></tr>
       </thead>
       <tbody>
         {inventory.map((item) => {
@@ -21,7 +25,7 @@ export default function ItemsPicker({ inventory, value, onChange, available }) {
           return (
             <tr key={item.Id}>
               <td>{item.Name}</td>
-              <td>{money(item.UnitCost)}</td>
+              {showCost && <td>{money(item.UnitCost)}</td>}
               {available && <td className={free !== undefined && qty > free ? "error" : ""}>{free ?? "?"}</td>}
               <td>
                 <input type="number" min="0" max="1000" className="qty" value={qty}
