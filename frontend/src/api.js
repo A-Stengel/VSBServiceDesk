@@ -52,6 +52,14 @@ function withFiles(data, files) {
   return form;
 }
 
+// "per month", "per year" or "per <period>" for a license's billing period.
+export function perPeriod(period) {
+  if (!period) return "";
+  if (period.MonthsPerPeriod === 1) return "per month";
+  if (period.MonthsPerPeriod === 12) return "per year";
+  return `per ${String(period.Name).toLowerCase()}`;
+}
+
 export const api = {
   me: () => request("GET", "me"),
   home: () => request("GET", "home"),

@@ -401,8 +401,8 @@ endpoint("getTicket", { methods: ["GET"], route: "tickets/{id:int}" }, async (re
   `);
   const cc = await pool.request().input("Id", sql.Int, id).query("SELECT Email FROM dbo.TicketCc WHERE TicketId = @Id ORDER BY Email");
   const items = await pool.request().input("Id", sql.Int, id).query(`
-    SELECT ti.Id, ti.InventoryItemId, i.Name, ti.Quantity, ti.UnitCostAtTime,
-           ti.Quantity * ti.UnitCostAtTime AS TotalCost, ti.OutAt, ti.ReturnedAt
+    SELECT ti.Id, ti.InventoryItemId, i.Name, ti.Quantity,
+           ${tech ? "ti.UnitCostAtTime, ti.Quantity * ti.UnitCostAtTime AS TotalCost," : ""} ti.OutAt, ti.ReturnedAt
     FROM dbo.TicketItems ti
     JOIN dbo.InventoryItems i ON i.Id = ti.InventoryItemId
     WHERE ti.TicketId = @Id
@@ -551,13 +551,15 @@ endpoint(
 // Equipment on a ticket (technicians)
 // ---------------------------------------------------------------------------
 
-endpoint("inventoryAvailability", { methods: ["GET"], route: "inventory/availability" }, async (request) => {
+endpoint("inventoryAvailability", { methods: ["GET"], route: "inventory/availability" }, async (request, context, user) => {
   const pool = await getConnection();
   const rows = await getAvailability(pool, {
     startDate: optionalDate(request.query.get("startDate"), "Start date"),
     endDate: optionalDate(request.query.get("endDate"), "End date"),
     excludeTicketId: optionalId(request.query.get("excludeTicketId"), "Ticket")
   });
+  // Prices are for technicians only.
+  if (!user.IsTechnician) for (const row of rows) delete row.UnitCost;
   return { jsonBody: rows };
 });
 

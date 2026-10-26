@@ -291,7 +291,7 @@ function TechnicianPanel({ ticket, onSaved }) {
 function ItemsPanel({ ticket, items, onSaved }) {
   const { me, lookups } = useApp();
   const [adding, setAdding] = useState({ inventoryItemId: "", quantity: 1 });
-  const total = items.reduce((sum, i) => sum + Number(i.TotalCost), 0);
+  const total = items.reduce((sum, i) => sum + Number(i.TotalCost || 0), 0);
 
   async function act(promise) {
     try {
@@ -309,13 +309,13 @@ function ItemsPanel({ ticket, items, onSaved }) {
       {!items.length && <p className="muted">No equipment on this ticket.</p>}
       {items.length > 0 && (
         <table className="tbl compact">
-          <thead><tr><th>Item</th><th>Qty</th><th>Cost</th>{me.IsTechnician && <th>Out</th>}{me.IsTechnician && <th>Back</th>}</tr></thead>
+          <thead><tr><th>Item</th><th>Qty</th>{me.IsTechnician && <th>Cost</th>}{me.IsTechnician && <th>Out</th>}{me.IsTechnician && <th>Back</th>}</tr></thead>
           <tbody>
             {items.map((i) => (
               <tr key={i.Id}>
                 <td>{i.Name}</td>
                 <td>{i.Quantity}</td>
-                <td>{money(i.TotalCost)}</td>
+                {me.IsTechnician && <td>{money(i.TotalCost)}</td>}
                 {me.IsTechnician && (
                   <td><input type="checkbox" checked={!!i.OutAt} onChange={(e) => act(api.updateItem(ticket.Id, i.Id, { out: e.target.checked }))} /></td>
                 )}
@@ -327,7 +327,7 @@ function ItemsPanel({ ticket, items, onSaved }) {
           </tbody>
         </table>
       )}
-      {total > 0 && <p className="muted">Total (tracking only): {money(total)}</p>}
+      {me.IsTechnician && total > 0 && <p className="muted">Total (tracking only): {money(total)}</p>}
       {me.IsTechnician && (
         <div className="row">
           <select value={adding.inventoryItemId} onChange={(e) => setAdding({ ...adding, inventoryItemId: e.target.value })}>
