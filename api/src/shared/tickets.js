@@ -2,6 +2,7 @@ const { sql } = require("./db");
 const { HttpError } = require("./errors");
 const { getHoldings } = require("./holdings");
 const { logChange } = require("./changelog");
+const { assertTicketStock } = require("./inventory");
 
 const personName = (alias) => `COALESCE(NULLIF(${alias}.DisplayName, ''), CONCAT(${alias}.FirstName, ' ', ${alias}.LastName))`;
 
@@ -118,6 +119,8 @@ async function setStatus(db, ticket, statusId, actorId) {
     .input("StatusId", sql.Int, statusId)
     .query(`UPDATE dbo.Tickets SET StatusId = @StatusId, UpdatedAt = SYSUTCDATETIME(), ${statusTimingSql(status)} WHERE Id = @Id`);
   await recordEvents(db, ticket.Id, actorId, [{ field: "Status", oldValue: ticket.StatusName, newValue: status.Name }]);
+  // Reopening counts its equipment again, so there must be enough of it.
+  if (ticket.IsClosed && !status.IsClosed) await assertTicketStock(db, ticket.Id);
   await accountOnClose(db, ticket, status, actorId, warnings);
   return warnings;
 }

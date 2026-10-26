@@ -13,7 +13,7 @@ const { getConnection, withTransaction, sql } = require("../shared/db");
 const { USER_SELECT } = require("../shared/auth");
 const { getSettings } = require("../shared/settings");
 const { getHoldings } = require("../shared/holdings");
-const { readItems, addTicketItem, getAvailability } = require("../shared/inventory");
+const { readItems, addTicketItem, assertSeats } = require("../shared/inventory");
 const { logChange, listChanges } = require("../shared/changelog");
 const { TICKET_SELECT, withNumber } = require("../shared/tickets");
 
@@ -159,12 +159,11 @@ endpoint(
           SELECT @UserId, Id, CostPerSeat FROM dbo.Software WHERE Id = @SoftwareId AND IsActive = 1
         `);
         if (!seat.recordset.length) throw new HttpError(400, "That software doesn't exist");
+        await assertSeats(tx, [softwareId]);
         const name = await tx.request().input("Id", sql.Int, softwareId).query("SELECT Name FROM dbo.Software WHERE Id = @Id");
         summary = `Assigned a ${name.recordset[0].Name} seat`;
       } else {
         const [item] = readItems([body]);
-        const free = (await getAvailability(tx)).find((a) => a.Id === item.inventoryItemId);
-        if (free && free.Available < item.quantity) throw new HttpError(400, `Only ${Math.max(free.Available, 0)} ${free.Name} available`);
         const added = await addTicketItem(tx, null, item.inventoryItemId, item.quantity, id);
         summary = `Handed out ${added.name}${item.quantity > 1 ? ` (x${item.quantity})` : ""}`;
       }

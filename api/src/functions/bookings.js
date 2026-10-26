@@ -12,7 +12,7 @@ const {
 const { HttpError } = require("../shared/errors");
 const { getConnection, withTransaction, sql } = require("../shared/db");
 const { getSettings, saveSettings } = require("../shared/settings");
-const { bookingWarnings, readItems, addTicketItem } = require("../shared/inventory");
+const { assertTicketStock, readItems, addTicketItem } = require("../shared/inventory");
 const { personName, formatNumber, loadTicket, setStatus, recordEvents } = require("../shared/tickets");
 const { logChange } = require("../shared/changelog");
 
@@ -325,7 +325,7 @@ endpoint(
     const pool = await getConnection();
     const room = await roomName(pool, roomId);
     if (!room.IsActive) throw new HttpError(400, "That room can't be booked any more");
-    const warnings = await bookingWarnings(pool, items, { startDate: startAt.slice(0, 10), endDate: endAt.slice(0, 10) });
+    const warnings = [];
 
     let bookingId;
     try {
@@ -453,6 +453,7 @@ endpoint(
         await tx.request().input("Id", sql.Int, booking.TicketId)
           .input("StartDate", sql.Date, startAt.slice(0, 10)).input("EndDate", sql.Date, endAt.slice(0, 10))
           .query("UPDATE dbo.Tickets SET StartDate = @StartDate, EndDate = @EndDate, UpdatedAt = SYSUTCDATETIME() WHERE Id = @Id");
+        await assertTicketStock(tx, booking.TicketId);
         await recordEvents(tx, booking.TicketId, user.Id, [
           { field: "Start date", oldValue: day(ticket.StartDate), newValue: startAt.slice(0, 10) },
           { field: "End date", oldValue: day(ticket.EndDate), newValue: endAt.slice(0, 10) }
@@ -464,11 +465,6 @@ endpoint(
           throw new HttpError(403, "Only the person who booked it or IT can change the equipment");
         }
         const items = readItems(body.items);
-        warnings = await bookingWarnings(tx, items, {
-          startDate: startAt.slice(0, 10),
-          endDate: endAt.slice(0, 10),
-          excludeTicketId: booking.TicketId
-        });
         await syncItems(tx, settings, updated, items, user.Id);
       }
     });

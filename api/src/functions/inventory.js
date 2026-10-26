@@ -4,6 +4,7 @@ const { getConnection, withTransaction, sql } = require("../shared/db");
 const { getSettings } = require("../shared/settings");
 const { logChange, listChanges } = require("../shared/changelog");
 const { money } = require("../shared/format");
+const { lowestAvailable } = require("../shared/inventory");
 
 // The Inventory page: equipment (how many IT owns and how many are out now)
 // and software licenses (seats owned and in use, and what they cost). Every
@@ -188,8 +189,15 @@ endpoint(
         }
         if ("count" in body) {
           const count = readCount(body.count, kind.count.label);
-          const use = await kind.inUse(tx, id);
-          if (count < use.used) throw new HttpError(400, `${use.used} are ${use.label}, so ${kind.count.label.toLowerCase()} can't go below that`);
+          if (kind === KINDS.equipment) {
+            // Out now, or booked for any day from today on
+            const low = await lowestAvailable(tx, id);
+            const needed = low ? before.Count - low.Available : 0;
+            if (count < needed) throw new HttpError(400, `${needed} are out or booked on the busiest day, so ${kind.count.label.toLowerCase()} can't go below that`);
+          } else {
+            const use = await kind.inUse(tx, id);
+            if (count < use.used) throw new HttpError(400, `${use.used} are ${use.label}, so ${kind.count.label.toLowerCase()} can't go below that`);
+          }
           if (count !== before.Count) {
             sets.push(`${kind.count.column} = @Count`);
             req.input("Count", sql.Int, count);
