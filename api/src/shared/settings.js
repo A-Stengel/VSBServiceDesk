@@ -15,6 +15,12 @@ const TEMPLATES = [
 // Every row in dbo.Settings the app knows about, how to edit it, and what it means.
 // "lookup" settings store the Id of a row in that lookup table.
 const SETTINGS_META = [
+  { key: "AppName", label: "App name", type: "text", section: "organization" },
+  { key: "OrganizationName", label: "Organization name", type: "text", section: "organization" },
+  { key: "TimeZone", label: "Time zone", type: "timezone", section: "organization" },
+  { key: "StaffEmailDomains", label: "Staff email domains (comma separated)", type: "text", section: "organization" },
+  { key: "MailboxAddress", label: "Service desk mailbox", type: "email", section: "organization" },
+  { key: "TestingMailboxAddress", label: "Testing mailbox", type: "email", section: "organization" },
   { key: "NewStatusId", label: "Status for new tickets", type: "lookup", lookup: "statuses" },
   { key: "AssignedStatusId", label: "Status when a New ticket gets a technician", type: "lookup", lookup: "statuses" },
   { key: "AwaitingStatusId", label: "Status after a technician replies", type: "lookup", lookup: "statuses" },
@@ -29,18 +35,16 @@ const SETTINGS_META = [
   { key: "EmailSwitch", label: "Outgoing email", type: "choice", choices: ["Off", "IT only", "On"] },
   { key: "WarningBusinessDays", label: "Business days before the warning email", type: "number" },
   { key: "CloseBusinessDays", label: "Business days before automatic close", type: "number" },
-  { key: "MailboxAddress", label: "Service desk mailbox", type: "text" },
   { key: "ITTeamEmails", label: "IT team notification emails (comma separated)", type: "text" },
   { key: "MailboxCheckMinutes", label: "Minutes between mailbox checks", type: "number" },
   { key: "BookingPendingStatusId", label: "Status for new event bookings", type: "lookup", lookup: "bookingStatuses" },
   { key: "BookingConfirmedStatusId", label: "Status when an event manager confirms a booking", type: "lookup", lookup: "bookingStatuses" },
   { key: "BookingDeclinedStatusId", label: "Status when an event manager declines a booking", type: "lookup", lookup: "bookingStatuses" },
   { key: "BookingCancelledStatusId", label: "Status when a booking is cancelled", type: "lookup", lookup: "bookingStatuses" },
-  { key: "BookingTicketTypeId", label: "Ticket type for a booking's equipment", type: "lookup", lookup: "ticketTypes" },
+  { key: "BookingTicketTypeId", label: "Ticket type for rentals and event bookings", type: "lookup", lookup: "ticketTypes" },
   { key: "EventsCalendarAddress", label: "Events calendar address", type: "text" },
-  { key: "EventGuidelines", label: "Event booking guidelines", type: "longtext" },
+  { key: "EventGuidelines", label: "Event booking guidelines", type: "richtext" },
   { key: "HREmails", label: "HR notification emails (comma separated)", type: "text" },
-  { key: "LowStockThreshold", label: "Warn when this many or fewer are available", type: "number" },
   ...TEMPLATES.flatMap((t) => [
     { key: `Template${t.key}Subject`, label: `${t.label}: subject`, type: "text", template: t.key },
     { key: `Template${t.key}Body`, label: `${t.label}: message`, type: "longtext", template: t.key }
@@ -74,7 +78,7 @@ async function saveSettings(values) {
     await pool
       .request()
       .input("Key", sql.NVarChar(100), key)
-      .input("Value", sql.NVarChar(4000), value === null || value === undefined ? null : String(value))
+      .input("Value", sql.NVarChar(sql.MAX), value === null || value === undefined ? null : String(value))
       .query(`
         UPDATE dbo.Settings SET [Value] = @Value WHERE [Key] = @Key;
         IF @@ROWCOUNT = 0 INSERT INTO dbo.Settings ([Key], [Value]) VALUES (@Key, @Value);

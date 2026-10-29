@@ -3,6 +3,7 @@ const { HttpError } = require("./errors");
 const { getHoldings } = require("./holdings");
 const { logChange } = require("./changelog");
 const { assertTicketStock } = require("./inventory");
+const { toWall } = require("./clock");
 
 const personName = (alias) => `COALESCE(NULLIF(${alias}.DisplayName, ''), CONCAT(${alias}.FirstName, ' ', ${alias}.LastName))`;
 
@@ -20,8 +21,13 @@ const TICKET_SELECT = `
          t.ForPersonName, t.ForDepartmentId, fd.Name AS ForDepartmentName,
          t.TechnicianId, CASE WHEN te.Id IS NOT NULL THEN ${personName("te")} END AS TechnicianName,
          t.DepartmentId, d.Name AS DepartmentName,
-         t.Subject, t.Description, t.StartDate, t.EndDate,
-         t.CreatedAt, t.UpdatedAt, t.WaitingSince, t.ClosedAt, t.LegacyId
+         t.Subject, t.Description, t.StartDate, t.EndDate, t.StartAt, t.EndAt,
+         t.CreatedAt, t.UpdatedAt, t.WaitingSince, t.ClosedAt, t.LegacyId,
+         CAST(CASE WHEN tr.TicketId IS NOT NULL THEN 1 ELSE 0 END AS BIT) AS HasRoom,
+         CAST(CASE WHEN EXISTS (SELECT 1 FROM dbo.TicketItems ti WHERE ti.TicketId = t.Id) THEN 1 ELSE 0 END AS BIT) AS HasEquipment,
+         tr.RoomId, rm.Name AS RoomName, tr.AttendeeCount, tr.Refreshments, tr.Foia, tr.LunchCatered,
+         tr.BookingStatusId, bs.Name AS RoomStatusName, bs.Color AS RoomStatusColor, bs.IsActiveBooking,
+         tr.ConfirmedById, CASE WHEN cb.Id IS NOT NULL THEN ${personName("cb")} END AS ConfirmedByName, tr.ConfirmedAt
   FROM dbo.Tickets t
   JOIN dbo.TicketTypes tt ON tt.Id = t.TicketTypeId
   JOIN dbo.Statuses s ON s.Id = t.StatusId
@@ -34,19 +40,62 @@ const TICKET_SELECT = `
   LEFT JOIN dbo.Departments fd ON fd.Id = t.ForDepartmentId
   LEFT JOIN dbo.Users te ON te.Id = t.TechnicianId
   LEFT JOIN dbo.Departments d ON d.Id = t.DepartmentId
+  LEFT JOIN dbo.TicketRooms tr ON tr.TicketId = t.Id
+  LEFT JOIN dbo.Rooms rm ON rm.Id = tr.RoomId
+  LEFT JOIN dbo.BookingStatuses bs ON bs.Id = tr.BookingStatusId
+  LEFT JOIN dbo.Users cb ON cb.Id = tr.ConfirmedById
 `;
+
+// A ticket with a room and no equipment is HR's alone: technicians' lists
+// and counts leave it out (they can still open it).
+const FOR_IT_SQL = `(NOT EXISTS (SELECT 1 FROM dbo.TicketRooms xr WHERE xr.TicketId = t.Id)
+  OR EXISTS (SELECT 1 FROM dbo.TicketItems xi WHERE xi.TicketId = t.Id))`;
+
+// History lines about the room and the event, the only ones Event Managers
+// see.
+const ROOM_FIELDS = [
+  "Created", "Room requested", "Room status", "Reason", "Subject", "Starts", "Ends", "Room", "Attendee count",
+  "Refreshments", "FOIA", "Lunch catered", "Comments", "Cancelled", "Closed automatically"
+];
 
 // Ticket numbers are shown padded to 7 digits, like 0010000.
 const formatNumber = (id) => String(id).padStart(7, "0");
 
 function withNumber(ticket) {
-  return { ...ticket, Number: formatNumber(ticket.Id) };
+  return { ...ticket, Number: formatNumber(ticket.Id), StartAt: toWall(ticket.StartAt), EndAt: toWall(ticket.EndAt) };
 }
 
-// Technicians see every ticket; everyone else sees tickets they asked for or
-// that are for them.
-function canSee(user, ticket) {
-  return user.IsTechnician || ticket.RequesterId === user.Id || ticket.ForUserId === user.Id;
+// What someone may see on a ticket. Technicians see everything. The
+// requester (or the person it's for) sees their own ticket without notes.
+// Event Managers (HR) see tickets with a room, but only the room part: no
+// equipment, no technician notes, and no status, priority or technician.
+function accessOf(user, ticket) {
+  const own = ticket.RequesterId === user.Id || ticket.ForUserId === user.Id;
+  const hr = !!user.IsEventManager && !!ticket.HasRoom;
+  return {
+    see: !!user.IsTechnician || own || hr,
+    equipment: !!user.IsTechnician || own,
+    technicianNotes: !!user.IsTechnician,
+    hrNotes: !!user.IsTechnician || hr,
+    roomOnlyView: !user.IsTechnician && hr && !own,
+    hr
+  };
+}
+
+const canSee = (user, ticket) => accessOf(user, ticket).see;
+
+// A ticket as this person may see it.
+function forViewer(ticket, user) {
+  const shaped = withNumber(ticket);
+  const access = accessOf(user, ticket);
+  if (!access.equipment) delete shaped.HasEquipment;
+  if (access.roomOnlyView) {
+    for (const key of ["StatusId", "StatusName", "StatusColor", "PriorityId", "PriorityName", "PriorityRank", "TechnicianId",
+      "TechnicianName", "CategoryId", "CategoryName", "SubcategoryId", "SubcategoryName", "WaitingSince", "IsWaitingOnRequester"]) {
+      delete shaped[key];
+    }
+  }
+  return shaped;
 }
 
 async function loadTicket(db, id) {
@@ -144,6 +193,10 @@ async function recordEvents(db, ticketId, actorId, changes) {
 
 module.exports = {
   TICKET_SELECT,
+  FOR_IT_SQL,
+  ROOM_FIELDS,
+  accessOf,
+  forViewer,
   personName,
   formatNumber,
   withNumber,

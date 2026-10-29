@@ -10,7 +10,8 @@
     "@azure/functions": "^4.5.0",
     "@azure/identity": "^4.4.1",
     "@azure/storage-blob": "^12.24.0",
-    "mssql": "^11.0.1"
+    "mssql": "^11.0.1",
+    "sanitize-html": "^2.18.1"
   },
   "engines": {
     "node": ">=20"

@@ -110,7 +110,7 @@ function optionalDate(value, field) {
 }
 
 // Accepts YYYY-MM-DDTHH:MM (a datetime-local input) and returns it, or null
-// when empty. Booking times are VSB local time and are stored as typed.
+// when empty. Booking times are the desk's local time and are stored as typed.
 function optionalDateTime(value, field) {
   if (value === undefined || value === null || value === "") return null;
   const match = typeof value === "string" && value.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})(:00)?$/);

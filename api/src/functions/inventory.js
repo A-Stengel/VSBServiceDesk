@@ -1,7 +1,6 @@
 const { endpoint, readJson, requiredText, optionalId, isUniqueViolation } = require("../shared/endpoint");
 const { HttpError } = require("../shared/errors");
 const { getConnection, withTransaction, sql } = require("../shared/db");
-const { getSettings } = require("../shared/settings");
 const { logChange, listChanges } = require("../shared/changelog");
 const { money } = require("../shared/format");
 const { lowestAvailable } = require("../shared/inventory");
@@ -13,7 +12,7 @@ const { lowestAvailable } = require("../shared/inventory");
 
 async function equipment(db) {
   const result = await db.request().query(`
-    SELECT i.Id, i.Name, i.UnitCost, i.QuantityOwned, i.IsActive, i.IsDefaultForOnboarding,
+    SELECT i.Id, i.Name, i.UnitCost, i.QuantityOwned, i.IsActive, i.IsDefaultForOnboarding, i.LowStockAt,
            COALESCE(o.QuantityOut, 0) AS QuantityOut,
            i.QuantityOwned - COALESCE(o.QuantityOut, 0) AS Available,
            CAST(CASE WHEN EXISTS (
@@ -51,14 +50,12 @@ async function licenses(db) {
 
 endpoint("inventory", { methods: ["GET"], route: "inventory", role: "technician" }, async () => {
   const pool = await getConnection();
-  const settings = await getSettings();
   const items = await equipment(pool);
   const software = await licenses(pool);
   return {
     jsonBody: {
       equipment: items,
       licenses: software,
-      lowStockThreshold: settings.LowStockThreshold ?? 2,
       totals: {
         equipmentValue: items.reduce((sum, i) => sum + i.QuantityOwned * Number(i.UnitCost), 0),
         monthlyLicenses: software.reduce((sum, s) => sum + Number(s.MonthlyCost || 0), 0)
@@ -73,6 +70,15 @@ function readCount(value, field) {
   if (value === "" || value === null || value === undefined || !Number.isInteger(n) || n < 0 || n > 100000) {
     throw new HttpError(400, `${field} must be a whole number`);
   }
+  return n;
+}
+
+// Each item's low stock warning: Available turns orange at or below it.
+// Blank means no warning.
+function readLowStock(value) {
+  if (value === "" || value === null || value === undefined) return null;
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 0 || n > 100000) throw new HttpError(400, "Warn at must be a whole number, or blank for no warning");
   return n;
 }
 
@@ -117,8 +123,8 @@ function kindOf(request) {
   return kind;
 }
 
-// Body: { name, count, cost } and, for licenses, { billingPeriodId } (Monthly
-// when left out).
+// Body: { name, count, cost } and, for equipment, { lowStockAt } (blank for
+// no warning) or, for licenses, { billingPeriodId } (Monthly when left out).
 endpoint(
   "addInventory",
   { methods: ["POST"], route: "inventory/{kind}", role: "technician", failMessage: "Could not add it" },
@@ -145,7 +151,8 @@ endpoint(
             INSERT INTO dbo.Software (Name, SeatsPurchased, CostPerSeat, BillingPeriodId) VALUES (@Name, @Count, @Cost, @PeriodId)
           `);
         } else {
-          await req.query("INSERT INTO dbo.InventoryItems (Name, QuantityOwned, UnitCost) VALUES (@Name, @Count, @Cost)");
+          await req.input("LowStockAt", sql.Int, readLowStock(body.lowStockAt))
+            .query("INSERT INTO dbo.InventoryItems (Name, QuantityOwned, UnitCost, LowStockAt) VALUES (@Name, @Count, @Cost, @LowStockAt)");
         }
         await logChange(tx, {
           area: "inventory",
@@ -162,7 +169,8 @@ endpoint(
   }
 );
 
-// Body: any of { name, count, cost, isActive } and, for licenses, billingPeriodId
+// Body: any of { name, count, cost, isActive } and, for equipment,
+// lowStockAt or, for licenses, billingPeriodId
 endpoint(
   "updateInventory",
   { methods: ["PATCH"], route: "inventory/{kind}/{id:int}", role: "technician", failMessage: "Could not save it" },
@@ -173,7 +181,11 @@ endpoint(
     try {
       await withTransaction(async (tx) => {
         const found = await tx.request().input("Id", sql.Int, id)
-          .query(`SELECT Name, ${kind.count.column} AS Count, ${kind.cost.column} AS Cost, IsActive FROM ${kind.table} WHERE Id = @Id AND IsDeleted = 0`);
+          .query(`
+            SELECT Name, ${kind.count.column} AS Count, ${kind.cost.column} AS Cost, IsActive
+                   ${kind === KINDS.equipment ? ", LowStockAt" : ""}
+            FROM ${kind.table} WHERE Id = @Id AND IsDeleted = 0
+          `);
         const before = found.recordset[0];
         if (!before) throw new HttpError(404, "Not found");
         const sets = [];
@@ -210,6 +222,15 @@ endpoint(
             sets.push(`${kind.cost.column} = @Cost`);
             req.input("Cost", sql.Decimal(10, 2), cost);
             notes.push(`${before.Name}: ${kind.cost.label.toLowerCase()} ${money(before.Cost)} to ${money(cost)}`);
+          }
+        }
+        if (kind === KINDS.equipment && "lowStockAt" in body) {
+          const lowStockAt = readLowStock(body.lowStockAt);
+          if (lowStockAt !== before.LowStockAt) {
+            sets.push("LowStockAt = @LowStockAt");
+            req.input("LowStockAt", sql.Int, lowStockAt);
+            const shown = (n) => (n === null ? "no warning" : String(n));
+            notes.push(`${before.Name}: warn at ${shown(before.LowStockAt)} to ${shown(lowStockAt)}`);
           }
         }
         if (kind === KINDS.licenses && "billingPeriodId" in body) {
