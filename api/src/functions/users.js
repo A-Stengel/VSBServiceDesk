@@ -10,7 +10,7 @@ const {
 } = require("../shared/endpoint");
 const { HttpError } = require("../shared/errors");
 const { getConnection, withTransaction, sql } = require("../shared/db");
-const { USER_SELECT } = require("../shared/auth");
+const { USER_SELECT, isStaffEmail } = require("../shared/auth");
 const { getSettings } = require("../shared/settings");
 const { getHoldings } = require("../shared/holdings");
 const { readItems, addTicketItem, assertSeats } = require("../shared/inventory");
@@ -84,9 +84,8 @@ endpoint(
     const firstName = requiredText(body.firstName, "First name", 100);
     const lastName = optionalText(body.lastName, "Last name", 100) || "";
     const settings = await getSettings();
-    const domains = (process.env.ALLOWED_EMAIL_DOMAINS || "vsb.org").split(",").map((d) => d.trim().toLowerCase());
     const userTypeId = optionalId(body.userTypeId, "User type") ||
-      (domains.includes(email.split("@")[1]) ? settings.StaffUserTypeId : settings.ExternalUserTypeId);
+      (isStaffEmail(settings, email) ? settings.StaffUserTypeId : settings.ExternalUserTypeId);
     const pool = await getConnection();
     try {
       const result = await pool

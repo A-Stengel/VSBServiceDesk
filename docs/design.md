@@ -1,6 +1,6 @@
 # VSB Service Desk Design
 
-Version 4, 2026-10-05.
+Version 5, approved 2026-10-29. Version 4 was approved on 2026-10-05.
 
 ## Summary
 
@@ -32,13 +32,50 @@ every ticket from one queue.
   Access & Equipment Change and Off Boarding under it) and Equipment Rental.
   Costs are tracked from inventory and per-person software licenses. There is no
   approval step.
-- **Event booking.** Staff book a conference room, with any equipment they
-  need, on one form. HR confirms the room in its own Event Booking view, and
-  the app puts the event on the VSB Events shared calendar. Equipment creates a
-  linked Equipment Rental ticket for technicians.
+- **Equipment Rental / Event Booking.** Staff book a conference room,
+  equipment, or both on one form, and it becomes one ticket. HR confirms the
+  room part and never sees the equipment. IT handles the equipment part and
+  never sees room-only requests. The app puts events on the VSB Events shared
+  calendar.
+- **Rich text.** Descriptions, replies, notes, booking comments and the booking
+  guidelines use a rich text editor, and screenshots can be pasted straight
+  into the text.
 - **Reports later.** Reports are not in the first version.
 - **Switchover.** Every old ticket is imported once from a SharePoint CSV
   export, and both systems run side by side on the same mailbox while you test.
+
+## What changed in version 5
+
+Decided with AIdan on 2026-10-27 and 2026-10-29:
+
+- **One record for rentals and event bookings.** An Equipment Rental / Event
+  Booking request is one ticket with one number, whether it has a room,
+  equipment or both. The separate EventBookings table and its linked ticket go
+  away, and its room details move to a TicketRooms table that hangs off the
+  ticket.
+- **HR and IT see different parts.** Event Managers see and act on the room
+  part only: no equipment, no technician notes. Technicians see the whole
+  ticket.
+- **Room-only requests stay out of IT's lists.** They show only in HR's Event
+  bookings list and never alert the IT team. Adding equipment puts the ticket
+  in IT's lists.
+- **Room-only tickets close themselves** once the event has ended, or straight
+  away when HR declines the room or the requester cancels.
+- **Replies and notes on bookings.** HR can reply to the requester and add HR
+  notes. HR sees every reply and every HR note, but not technician notes.
+- **Rich text with pasted images** in descriptions, replies and notes. The
+  booking guidelines get rich text too, without images.
+- **Low-stock warning per item.** Each equipment item has its own "Warn at"
+  number, or none. The single Settings value goes away.
+- **Manager of** on a person's page is a multi-select dropdown instead of a
+  list of checkboxes.
+- **Everything customizable in the app**, so it can be packaged for another
+  organization: the app name, organization name, time zone, staff email
+  domains and the service desk mailbox are settings. See "Customizing the
+  app".
+- **Maintenance mode** (built with the email settings): staff see a "down for
+  maintenance" page, technicians and admins keep working, and all mail is read
+  from and sent to a testing mailbox.
 
 ## What changed in version 4
 
@@ -134,8 +171,9 @@ managed on the Settings page.
 - **TicketTypes.** Extra columns `UsesDates`, `UsesInventory`, `UsesLicenses`
   and `UsesChecklist`. Starting values: Support, Access & Equipment, Equipment
   Rental.
-- **BookingStatuses.** Extra columns `IsActiveBooking` and `Color`. Starting
-  values: Pending, Confirmed (both active), Declined, Cancelled.
+- **BookingStatuses.** The room part's status, shown as Room status. Extra
+  columns `IsActiveBooking` and `Color`. Starting values: Pending, Confirmed
+  (both active), Declined, Cancelled.
 - **Rooms.** Name only. Managed by Event Managers in the Event Booking view, not
   on the Settings page.
 - **Departments.** Your existing table, with an added `Code` column for short
@@ -154,8 +192,10 @@ rename statuses freely.
 
 ### Catalog tables
 
-- **InventoryItems.** Name, UnitCost (USD), QuantityOwned,
-  IsDefaultForOnboarding, IsActive.
+- **InventoryItems.** Name, UnitCost (USD), QuantityOwned, LowStockAt,
+  IsDefaultForOnboarding, IsActive. `LowStockAt` is the number at or below
+  which Available turns orange on the Inventory page. Empty means the item
+  never warns.
 - **Software.** Name, CostPerSeat (USD), BillingPeriodId, SeatsPurchased,
   IsDefaultForOnboarding, IsActive.
 
@@ -166,10 +206,15 @@ Ticket data and conversation data are kept apart:
 - **Tickets** holds the ticket data, one row per ticket: TicketTypeId, StatusId,
   PriorityId, CategoryId, SubcategoryId, SourceId, RequesterId, ForUserId,
   TechnicianId, DepartmentId, Subject, Description, StartDate, EndDate,
-  CreatedAt, UpdatedAt, WaitingSince, WarningSentAt, ClosedAt, LegacyId.
+  StartAt, EndAt, CreatedAt, UpdatedAt, WaitingSince, WarningSentAt, ClosedAt,
+  LegacyId. `StartAt` and `EndAt` are the date and time of a rental or event,
+  and `StartDate` and `EndDate` always hold their dates, which is what the
+  equipment counts use.
 - **TicketConversations** holds the conversation, one row per response, linked
-  to its ticket by TicketId: AuthorId, Body, IsTechnicianNote, Direction (in or
-  out), EmailMessageId, CreatedAt.
+  to its ticket by TicketId: AuthorId, Body, IsTechnicianNote,
+  VisibleToEventManagers, Direction (in or out), EmailMessageId, CreatedAt. A
+  note has `IsTechnicianNote` set, so the requester never sees it. An HR note
+  also has `VisibleToEventManagers` set.
 
 The requester's first message is the ticket's Description. Every reply after
 that, from either side, and every technician note is a row in
@@ -181,7 +226,9 @@ getting access.
 
 - **TicketCc.** One CC address on a ticket: TicketId, Email.
 - **Attachments.** One file: TicketId, ConversationId (empty when attached to
-  the original request), FileName, ContentType, SizeBytes, BlobPath.
+  the original request), FileName, ContentType, SizeBytes, BlobPath, IsInline.
+  An image pasted into the text is an attachment with `IsInline` set, so it
+  shows in the text rather than in the attachment list.
 - **TicketItems.** Inventory on a ticket: TicketId, InventoryItemId, Quantity,
   UnitCostAtTime, OutAt, ReturnedAt.
 - **LicenseAssignments.** One seat held by one person: UserId, SoftwareId,
@@ -195,13 +242,12 @@ getting access.
   stay out of the conversation.
 - **InboundEmails.** One mailbox message already processed: EmailMessageId
   (unique), ReceivedAt, TicketId.
-- **EventBookings.** One room booking: RequesterId, Title, StartAt, EndAt,
-  RoomId, AttendeeCount, Refreshments, Foia, LunchCatered, Comments,
-  BookingStatusId, TicketId (the linked Equipment Rental ticket, empty for
-  room-only bookings), CalendarEventId, ConfirmedById, ConfirmedAt, CreatedAt,
-  UpdatedAt.
-- **BookingEvents.** One change to a booking, for history, the same way as
-  TicketEvents: BookingId, ActorId, Field, OldValue, NewValue, At.
+- **TicketRooms.** The room part of an Equipment Rental / Event Booking
+  ticket, at most one per ticket: TicketId, RoomId, AttendeeCount,
+  Refreshments, Foia, LunchCatered, BookingStatusId, CalendarEventId,
+  ConfirmedById, ConfirmedAt. The title is the ticket's Subject, the comments
+  are its Description, and the times are its `StartAt` and `EndAt`. Changes go
+  in TicketEvents like any other ticket change.
 
 Ticket numbers display padded to 7 digits. Imported tickets keep their old
 numbers, and new tickets start at 0010000, so the two systems never use the same
@@ -220,14 +266,21 @@ price change doesn't rewrite past costs.
   old Access Request, Onboarding and Offboarding types to Access & Equipment
   with the matching category, retires the Event Booking and Equipment
   Provisioning types, and leaves their test tickets as they are.
+- **Existing bookings.** Script 11 turns each EventBookings row into the
+  room part of a ticket: a booking that already had a linked Equipment Rental
+  ticket joins that ticket, and a room-only booking gets a new ticket. Its
+  history moves to TicketEvents, and the EventBookings and BookingEvents
+  tables are then dropped. Script 11 also copies today's low-stock setting
+  onto every equipment item, so nothing changes until you edit them.
 - **UserDepartments.** Renamed `DepartmentManagers`: one row per manager per
   department, so a manager can be linked to several departments. Each person's
   own department is the single `Users.DepartmentId`.
 
 ### Settings table
 
-One row per setting: the outgoing email switch, the 3 and 4 business-day limits,
-the mailbox address, the IT team's notification addresses, the status a ticket
+One row per setting: the organization settings (see "Customizing the app"),
+the outgoing email switch, the 3 and 4 business-day limits, the IT team's
+notification addresses, the status a ticket
 switches to when the requester replies, how often to check the mailbox, the
 events calendar address, and the event booking Guidelines text (edited by Event
 Managers).
@@ -246,9 +299,11 @@ App. The staff screens follow Zendesk.
   status, technician and last update.
 - **Ticket.** The conversation without technician notes, attachments, a reply
   box, and the survey once the ticket is closed.
-- **Book an event.** The booking form, described under Event booking.
-- **My bookings.** Their upcoming and past bookings, each with its status. They
-  can open one to change or cancel it.
+- **Equipment Rental / Event Booking.** The booking form, described under
+  Event booking.
+- **My rentals and events.** Their upcoming and past requests, each with its
+  room status and equipment status. Each one opens as an ordinary ticket page,
+  where they can reply, change it or cancel it.
 
 Starting form fields by ticket type. Every type also has Subject, Description,
 Priority, CC and Attachments.
@@ -260,9 +315,9 @@ Priority, CC and Attachments.
   - **Access & Equipment Change.** Who it's for, and the equipment or software
     to add or remove.
   - **Off Boarding.** Who is leaving, and their last day.
-- **Equipment Rental.** Start date, end date, and the items and quantities
-  needed. This is for loans with no room, like a laptop for a trip. Rentals
-  with a room start from the booking form instead.
+- **Equipment Rental / Event Booking.** Uses the booking form instead of the
+  usual fields. A room is optional, so a loan with no room, like a laptop for a
+  trip, uses the same form.
 
 ### Technicians
 
@@ -276,10 +331,11 @@ Priority, CC and Attachments.
   Attachments and Move to Closure.
 - **Ticket extras.** Shown depending on the ticket type and category: start and
   end dates, inventory lines with costs, license seats, or an onboarding or
-  offboarding checklist. A ticket linked to a booking shows the booking's
-  title, room and times, with a link to it.
-- **Event bookings.** Technicians and Admins can open the Event Booking view
-  and do everything an Event Manager can.
+  offboarding checklist. An Equipment Rental / Event Booking ticket shows a
+  Room panel and an Equipment panel beside the conversation.
+- **Rentals & Events.** Every request with equipment, with its room status and
+  equipment status. Room-only requests don't appear here or in the ticket
+  lists.
 - **New ticket.** The staff form, plus Requester (any user, including outside
   people), Type and Source, for phone calls and walk-ups.
 - **Inventory.** Item types with unit cost, quantity owned, how many are out
@@ -292,20 +348,23 @@ Priority, CC and Attachments.
 
 ### Event Managers
 
-- **Event Booking view.** Their only page besides their own tickets and
-  bookings. It lists every booking, with Pending ones first and a filter by
-  date, room and status. Two active bookings for the same room at overlapping
-  times are flagged, as a hint only.
-- **Booking page.** The booking's details, Confirm and Decline buttons, and
-  editing of every field. The linked ticket's equipment list is shown read-only
-  with its ticket number, but they can't open the ticket or change equipment.
+- **Event bookings.** Their only list besides their own tickets. It lists
+  every ticket with a room, with Pending ones first and a filter by date, room
+  and room status. Two active bookings for the same room at overlapping times
+  are flagged, as a hint only. It never shows equipment.
+- **Booking page.** The same ticket page technicians use, cut down to the room
+  part: the event details, the Room panel with Confirm and Decline, every reply,
+  HR notes, and the history of room and event changes. They can reply to the
+  requester, add an HR note and change the event details. They don't see the
+  equipment, technician notes, or the ticket's status, priority and technician.
 - **Rooms and Guidelines.** They add, rename and retire rooms, and edit the
   Guidelines text shown on the booking form.
 
 ### Admin
 
 - **Settings.** One tab per lookup table (add, rename, reorder, retire), plus
-  the onboarding defaults, the email switch, the day limits and roles.
+  the onboarding defaults, the email switch, the day limits, roles and the
+  organization settings.
 
 ## Email flow
 
@@ -371,6 +430,15 @@ Settings has a three-way switch for outgoing mail:
 It starts at Off. Incoming email is read in every mode, so tickets keep arriving
 while you test.
 
+### Maintenance mode
+
+Built with the email settings. An admin turns it on in Settings. While it's on:
+
+- Staff who sign in see a "down for maintenance" page. Technicians and admins
+  keep working as normal.
+- Mail is read only from the testing mailbox, and every outgoing email goes only
+  to the testing mailbox, so nothing reaches real requesters.
+
 ## Inventory, licenses, onboarding and offboarding
 
 These are ordinary tickets with extra panels. The ticket type decides which
@@ -404,55 +472,66 @@ The numbers are worked out like this:
 
 ## Event booking
 
-Room booking and equipment rental are one stop for staff. Bookings live in the
-EventBookings table, and HR works them as Event Managers. There is no
-SharePoint list and no Power Automate flow.
+Room booking and equipment rental are one stop for staff. Each request is one
+Equipment Rental / Event Booking ticket. Its room part lives in TicketRooms and
+HR works it as Event Managers. Its equipment part is the ticket's inventory
+lines and technicians work it. There is no SharePoint list and no Power
+Automate flow.
 
 ### The booking form
 
 It matches the current Power App form. Fields marked * are required.
 
-- Title*, Start date and time*, End date and time*, Location* (picked from the
-  room list) and Attendee Count*.
-- Refreshments*, FOIA* and Will Lunch Be Catered*, each a Yes or No switch.
+- Title*, Start date and time*, End date and time*, Location (picked from the
+  room list, or No room needed) and Attendee Count* when a room is picked.
+- Refreshments*, FOIA* and Will Lunch Be Catered*, each a Yes or No switch,
+  when a room is picked.
 - Items to Checkout, picking inventory items and quantities.
-- User Comments, for notes to HR or IT.
+- User Comments, in the rich text editor, for notes to HR or IT.
 - A Guidelines button that shows the text Event Managers keep up to date.
 
-The form doesn't check whether the room is free, because room availability
-can't be tracked reliably.
+A request needs a room, equipment or both. The form doesn't check whether the
+room is free, because room availability can't be tracked reliably.
 
 ### What happens
 
-1. **Submit.** The booking is saved as Pending and added to the VSB Events
-   calendar, with the room as the event's location, as the current flow does.
-   Every Event Manager is emailed. If any items were picked, a linked Equipment
-   Rental ticket is created for the booking's dates, and the IT team gets the
-   usual new ticket email.
-2. **Confirm or decline.** An Event Manager confirms or declines it. The
-   requester is emailed either way. Declining removes the calendar event, and
-   the linked ticket is closed with a note saying why.
-3. **Changes.** The requester, an Event Manager or a technician can change
-   anything, including moving the meeting. The calendar event is updated and
-   the Event Managers are emailed. If there's a linked ticket, its equipment
-   dates move with the booking and the assigned technician is emailed. Adding
-   items to a room-only booking creates the linked ticket then. A change
-   doesn't send a confirmed booking back to Pending.
+1. **Submit.** One ticket is created. With a room, its room status is
+   Pending, it's added to the VSB Events calendar with the room as the event's
+   location, as the current flow does, and every Event Manager is emailed. With
+   equipment, the IT team gets the usual new ticket email.
+2. **Confirm or decline.** An Event Manager confirms or declines the room. The
+   requester is emailed either way. Declining removes the calendar event and
+   closes the ticket, with the reason added as a reply to the requester.
+3. **Changes.** The requester, an Event Manager or a technician can change the
+   event details, including moving the meeting. Only the requester and
+   technicians can change the equipment. The calendar event is updated and the
+   Event Managers are emailed. The equipment dates move with the event and the
+   assigned technician is emailed. Adding equipment to a room-only request puts
+   it in IT's lists and alerts the IT team. A change doesn't send a confirmed
+   room back to Pending.
 4. **Cancel.** The requester, an Event Manager or a technician can cancel. The
-   calendar event is removed, Event Managers are emailed, and a linked ticket is
-   closed with a note.
+   calendar event is removed, Event Managers are emailed, and the ticket is
+   closed.
+5. **Equipment.** Technicians check the items out to the requester and mark them
+   returned, as on any rental, and close the ticket once everything is back.
+6. **Room-only close.** A ticket with a room and no equipment closes itself once
+   the event has ended. A job checks every hour. These closes don't send the
+   closed email or the survey, since IT did no work on them.
 
-Every change is recorded in BookingEvents. The linked ticket works like any
-other rental: technicians set the items out and mark them returned.
+Every change is recorded in TicketEvents. Event Managers see only the room and
+event changes in the history.
 
 ### Who can do what
 
-- **Requester.** Books, sees and changes their own bookings.
-- **Event Manager.** Sees and changes every booking, confirms and declines,
-  manages rooms and the Guidelines text. No access to tickets, equipment or
-  Settings.
-- **Technician and Admin.** Everything an Event Manager can do, plus the
-  linked tickets.
+- **Requester.** Books, sees and changes their own requests, and replies on
+  them.
+- **Event Manager.** Sees every ticket with a room, but only its room part.
+  Confirms and declines, changes event details, replies to the requester, adds
+  HR notes, and manages rooms and the Guidelines text. No access to equipment,
+  technician notes, other tickets or the rest of Settings.
+- **Technician.** The whole ticket, including the equipment and every note.
+  Room-only tickets are left out of their lists, but they can still open one.
+- **Admin.** Everything a technician can do, plus Confirm and Decline.
 
 ### The VSB Events calendar
 
@@ -476,6 +555,49 @@ of a signed-in person, not as the app itself. The plan is:
 
 Calendar writes and booking emails follow the outgoing email switch. While it's
 at Off, nothing reaches the calendar or HR, so test bookings stay in the app.
+
+## Rich text
+
+Ticket descriptions, replies, notes, booking comments and the booking
+guidelines are written in a rich text editor with a small toolbar: bold,
+italic, underline, bulleted and numbered lists, links and clear formatting.
+Text pasted from Word or Outlook keeps that formatting.
+
+- **Pasted images.** A screenshot pasted into a description, reply or note is
+  uploaded with the ticket as an inline attachment and shown in place. It
+  follows the same size limit and access checks as any attachment, so an image
+  in a technician note is never shown to the requester. The guidelines take
+  text formatting only.
+- **Stored as HTML.** The server keeps only the tags the toolbar can make, plus
+  images that point at the ticket's own attachments. Anything else, such as
+  scripts, styles or outside images, is removed before saving.
+- **Email.** Replies go out as HTML email, with pasted images embedded in the
+  message. Formatting in incoming email is kept the same way.
+- **Existing text.** Script 11 turns the plain text already saved into the
+  same format, keeping its line breaks.
+
+## Customizing the app
+
+The aim is an app that can be packaged for another organization, so nothing
+about VSB is built into the code. Admins set these in Settings, Organization,
+Name, time zone and mailbox:
+
+- **App name.** Shown in the header, on the sign-in page and in the browser tab
+  (VSB Service Desk).
+- **Organization name.** Used in messages, such as who can sign in (Virginia
+  State Bar).
+- **Time zone.** Event times and when room-only bookings close
+  (America/New_York).
+- **Staff email domains.** Who can sign in, and who counts as staff when a
+  technician logs a ticket for someone (vsb.org). The admin's own domain must
+  stay in the list.
+- **Service desk mailbox.** Where tickets are emailed to and every email is
+  sent from (`servicedesk@vsb.org`).
+- **Testing mailbox.** The one address mail goes to and is read from in
+  maintenance mode. Empty until it's needed.
+
+The logo (Settings, Logo), the colors (Settings, Appearance), every list and
+the email templates were already settings.
 
 ## Migration and parallel run
 

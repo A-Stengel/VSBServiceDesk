@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 // The organization's logo. An admin can upload one in Settings > Logo; until
-// then, or when it can't be loaded, the built-in VSB seal shows.
+// then, or when it can't be loaded, the built-in seal shows.
 export const DEFAULT_LOGO = "/vsb-seal.png";
 const LOGO_URL = "/api/branding/logo";
 const CHANGED = "logo-changed";

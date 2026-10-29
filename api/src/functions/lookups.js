@@ -43,11 +43,17 @@ endpoint("getLookups", { methods: ["GET"], route: "lookups" }, async (request, c
         bookingDeclinedStatusId: settings.BookingDeclinedStatusId,
         bookingCancelledStatusId: settings.BookingCancelledStatusId,
         bookingTicketTypeId: settings.BookingTicketTypeId,
-        lowStockThreshold: settings.LowStockThreshold ?? 2,
         staffUserTypeId: settings.StaffUserTypeId,
         emailSwitch: settings.EmailSwitch || "Off"
       },
-      eventGuidelines: settings.EventGuidelines || ""
+      eventGuidelines: settings.EventGuidelines || "",
+      organization: {
+        appName: settings.AppName || "Service Desk",
+        organizationName: settings.OrganizationName || "",
+        timeZone: settings.TimeZone || "America/New_York",
+        mailboxAddress: settings.MailboxAddress || "",
+        staffDomains: settings.StaffEmailDomains || ""
+      }
     }
   };
 });

@@ -1,35 +1,21 @@
 import { useNavigate } from "react-router-dom";
-import { api, formatWallRange } from "../api.js";
+import { api } from "../api.js";
 import { useApp } from "../App.jsx";
 import BookingForm from "../components/BookingForm.jsx";
+import RichText from "../components/RichText.jsx";
+import { withPastedImages } from "../richtext.js";
 
-// Equipment Rental / Event Booking: one form for a room, equipment, or both.
-// With a room it's an event booking that HR confirms (any equipment goes to
-// IT on a linked ticket); without one it's an Equipment Rental ticket for IT.
+// Equipment Rental / Event Booking: one form, one ticket, for a room,
+// equipment, or both. HR confirms the room; IT handles the equipment.
 export default function BookEvent() {
   const navigate = useNavigate();
   const { lookups, notify } = useApp();
 
-  async function submit(data) {
-    if (data.roomId) {
-      const result = await api.createBooking(data);
-      notify(["Request sent. HR will confirm the room.", ...(result.warnings || [])].join(" "));
-      navigate(`/events/${result.booking.Id}`);
-      return;
-    }
-    const details = [
-      `When: ${formatWallRange(data.startAt, data.endAt)}`,
-      data.comments ? `Comments: ${data.comments}` : null
-    ].filter(Boolean).join("\n");
-    const result = await api.createTicket({
-      ticketTypeId: lookups.defaults.bookingTicketTypeId,
-      subject: data.title,
-      description: details,
-      startDate: data.startAt.slice(0, 10),
-      endDate: data.endAt.slice(0, 10),
-      items: data.items
-    }, []);
-    notify([`Rental request ${result.ticket.Number} sent to IT.`, ...(result.warnings || [])].join(" "));
+  async function submit(fields) {
+    const { data, files } = withPastedImages(fields, "comments");
+    const result = await api.createBooking(data, files);
+    const next = data.roomId ? "HR will confirm the room." : "IT will be in touch about the equipment.";
+    notify([`Request ${result.ticket.Number} sent. ${next}`, ...(result.warnings || [])].join(" "));
     navigate(`/tickets/${result.ticket.Id}`);
   }
 
@@ -43,7 +29,7 @@ export default function BookEvent() {
       <aside>
         <div className="card">
           <h3>Guidelines</h3>
-          <div className="body small">{lookups.eventGuidelines || "No guidelines have been written yet."}</div>
+          <RichText value={lookups.eventGuidelines} className="small" empty={<p className="muted small">No guidelines have been written yet.</p>} />
         </div>
       </aside>
     </div>

@@ -19,7 +19,7 @@ async function getAvailability(db, { startDate, endDate, excludeTicketId } = {})
     .input("End", sql.Date, endDate || startDate || today)
     .input("Exclude", sql.Int, excludeTicketId || null)
     .query(`
-      SELECT i.Id, i.Name, i.UnitCost, i.QuantityOwned, i.IsDefaultForOnboarding,
+      SELECT i.Id, i.Name, i.UnitCost, i.QuantityOwned, i.IsDefaultForOnboarding, i.LowStockAt,
              COALESCE(o.QuantityOut, 0) AS QuantityOut,
              i.QuantityOwned - COALESCE(o.QuantityOut, 0) AS Available
       FROM dbo.InventoryItems i

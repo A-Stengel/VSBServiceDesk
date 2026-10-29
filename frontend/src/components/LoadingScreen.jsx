@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import Logo from "./Logo.jsx";
+import { organization } from "../organization.js";
 
 // The card everyone sees while the site starts: each step ticks off, a note
 // appears when a step is slow, the countdown shows while the app retries, and
@@ -31,6 +32,7 @@ const Clock = () => (
 
 // boot: { step, attempt, since, retryIn, wait, failed: { message, gaveUp } }
 export default function LoadingScreen({ boot, onRetry }) {
+  const mailbox = organization().mailboxAddress;
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
@@ -102,7 +104,7 @@ export default function LoadingScreen({ boot, onRetry }) {
           <div className="boot-actions">
             <button className="btn pri" onClick={onRetry}><Retry size={16} />Try again</button>
             <div className="muted small">
-              If this keeps happening, email <b className="select">servicedesk@vsb.org</b> or call IT.
+              If this keeps happening, {mailbox ? <>email <b className="select">{mailbox}</b> or </> : ""}call IT.
             </div>
           </div>
         )}

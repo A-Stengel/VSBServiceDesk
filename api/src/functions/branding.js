@@ -8,7 +8,7 @@ const { logChange } = require("../shared/changelog");
 // The logo shown in the header, on the loading screen and in the browser tab.
 // It lives in Blob Storage, not the database, so it still shows while the
 // database is starting up. With no logo uploaded the site uses its built-in
-// VSB seal.
+// seal.
 const LOGO_PATH = "branding/logo";
 const LOGO_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif"];
 const MAX_LOGO_BYTES = 2 * 1024 * 1024;
@@ -53,7 +53,7 @@ endpoint(
   { methods: ["DELETE"], route: "manage/logo", role: "admin", failMessage: "Could not reset the logo" },
   async (request, context, user) => {
     await deleteFile(LOGO_PATH);
-    await withTransaction((tx) => logChange(tx, { area: "settings", section: "logo", actorId: user.Id, summary: "Went back to the built-in VSB seal" }));
+    await withTransaction((tx) => logChange(tx, { area: "settings", section: "logo", actorId: user.Id, summary: "Went back to the built-in logo" }));
     return { status: 204 };
   }
 );

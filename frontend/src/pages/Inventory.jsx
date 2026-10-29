@@ -46,7 +46,7 @@ export default function Inventory() {
         <button role="tab" aria-selected={tab === "licenses"} className={`tab ${tab === "licenses" ? "on" : ""}`} onClick={() => setParams({ tab: "licenses" }, { replace: true })}>Licenses</button>
       </div>
       {tab === "equipment"
-        ? <Equipment rows={data.equipment} low={data.lowStockThreshold} run={run} />
+        ? <Equipment rows={data.equipment} run={run} />
         : <Licenses rows={data.licenses} run={run} />}
 
       <div className="sec">Change history</div>
@@ -110,15 +110,31 @@ function BillingPicker({ value, label, onChange, style }) {
   );
 }
 
+// Each item's low stock warning: blank for none.
+function WarnAt({ value, label, onSave }) {
+  const shown = value === null || value === undefined ? "" : String(value);
+  const [draft, setDraft] = useState(shown);
+  useEffect(() => setDraft(shown), [shown]);
+  const commit = () => {
+    if (draft !== shown) onSave(draft === "" ? null : Number(draft));
+  };
+  return (
+    <input className="qty" style={{ width: 80, minHeight: 32, padding: "4px 8px", textAlign: "center" }} value={draft} aria-label={label}
+      placeholder="None" inputMode="numeric" onChange={(e) => setDraft(e.target.value.replace(/\D/g, ""))} onBlur={commit}
+      onKeyDown={(e) => e.key === "Enter" && commit()} />
+  );
+}
+
 function AddRow({ kind, countLabel, costLabel, run }) {
   const { lookups } = useApp();
   const licenses = kind === "licenses";
-  const blank = () => ({ name: "", count: "1", cost: "", billingPeriodId: lookups.billingPeriods[0]?.Id || "" });
+  const blank = () => ({ name: "", count: "1", cost: "", lowStockAt: "", billingPeriodId: lookups.billingPeriods[0]?.Id || "" });
   const [row, setRow] = useState(blank);
   async function add(e) {
     e.preventDefault();
     const body = { name: row.name, count: Number(row.count || 0), cost: Number(row.cost || 0) };
     if (licenses && row.billingPeriodId) body.billingPeriodId = Number(row.billingPeriodId);
+    if (!licenses) body.lowStockAt = row.lowStockAt === "" ? null : Number(row.lowStockAt);
     const ok = await run(api.addInventory(kind, body), `Added ${row.name.trim()}.`);
     if (ok) setRow(blank());
   }
@@ -127,6 +143,12 @@ function AddRow({ kind, countLabel, costLabel, run }) {
       <label className="field" style={{ flex: "2 1 220px" }}>Name<input value={row.name} maxLength={150} onChange={(e) => setRow({ ...row, name: e.target.value })} required /></label>
       <label className="field" style={{ flex: "1 1 120px" }}>{countLabel}<input type="number" min="0" value={row.count} onChange={(e) => setRow({ ...row, count: e.target.value })} required /></label>
       <label className="field" style={{ flex: "1 1 120px" }}>{costLabel}<input type="number" min="0" step="0.01" value={row.cost} placeholder="0.00" onChange={(e) => setRow({ ...row, cost: e.target.value })} /></label>
+      {!licenses && (
+        <label className="field" style={{ flex: "1 1 120px" }}>
+          Warn at (optional)
+          <input type="number" min="0" value={row.lowStockAt} placeholder="No warning" onChange={(e) => setRow({ ...row, lowStockAt: e.target.value })} />
+        </label>
+      )}
       {licenses && (
         <label className="field" style={{ flex: "1 1 140px" }}>
           Billed
@@ -138,17 +160,18 @@ function AddRow({ kind, countLabel, costLabel, run }) {
   );
 }
 
-function Equipment({ rows, low, run }) {
+// Available turns orange at or below the item's "Warn at" number.
+function Equipment({ rows, run }) {
   const update = (row, data, message) => run(api.updateInventory("equipment", row.Id, data), message);
   return (
     <div className="card flush">
       <div className="scroll">
-        <table className="tbl" style={{ minWidth: 820 }}>
+        <table className="tbl" style={{ minWidth: 900 }}>
           <thead>
-            <tr><th>Item</th><th>On hand</th><th className="num">Out now</th><th className="num">Available</th><th>Cost each</th><th /></tr>
+            <tr><th>Item</th><th>On hand</th><th className="num">Out now</th><th className="num">Available</th><th title="Available turns orange at or below this. Blank for no warning.">Warn at</th><th>Cost each</th><th /></tr>
           </thead>
           <tbody>
-            {!rows.length && <tr><td colSpan={6} className="muted">No equipment yet. Add the first item below.</td></tr>}
+            {!rows.length && <tr><td colSpan={7} className="muted">No equipment yet. Add the first item below.</td></tr>}
             {rows.map((r) => (
               <tr key={r.Id}>
                 <td>
@@ -157,7 +180,11 @@ function Equipment({ rows, low, run }) {
                 </td>
                 <td><Stepper value={r.QuantityOwned} min={r.QuantityOut} label={`${r.Name} on hand`} onSave={(n) => update(r, { count: n }, `${r.Name}: ${n} on hand.`)} /></td>
                 <td className="num">{r.QuantityOut}</td>
-                <td className="num" style={r.Available <= low ? { color: "var(--warn)", fontWeight: 600 } : undefined}>{r.Available}</td>
+                <td className="num" style={r.LowStockAt !== null && r.Available <= r.LowStockAt ? { color: "var(--warn)", fontWeight: 600 } : undefined}>{r.Available}</td>
+                <td>
+                  <WarnAt value={r.LowStockAt} label={`${r.Name} warn at`}
+                    onSave={(n) => update(r, { lowStockAt: n }, n === null ? `${r.Name}: no low stock warning.` : `${r.Name}: warn at ${n}.`)} />
+                </td>
                 <td><Cost value={r.UnitCost} label={`${r.Name} cost each`} onSave={(n) => update(r, { cost: n }, `${r.Name}: cost updated.`)} /></td>
                 <td>
                   {r.InUse

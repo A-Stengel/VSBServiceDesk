@@ -1,4 +1,3 @@
-const { randomUUID } = require("crypto");
 const {
   endpoint,
   readJson,
@@ -15,15 +14,19 @@ const { HttpError } = require("../shared/errors");
 const { getConnection, withTransaction, sql } = require("../shared/db");
 const { getSettings } = require("../shared/settings");
 const { USER_SELECT } = require("../shared/auth");
-const { uploadFile } = require("../shared/storage");
+const { saveAttachments, finishRichText, readInlineNames } = require("../shared/attachments");
+const { hasContent } = require("../shared/richtext");
 const { getAvailability, assertStock, assertTicketStock, assertSeats, readItems, addTicketItem } = require("../shared/inventory");
 const { getHoldings } = require("../shared/holdings");
 const { logChange } = require("../shared/changelog");
 const {
   TICKET_SELECT,
+  FOR_IT_SQL,
+  ROOM_FIELDS,
+  accessOf,
+  forViewer,
   personName,
   formatNumber,
-  withNumber,
   loadTicket,
   loadVisibleTicket,
   getStatus,
@@ -41,28 +44,6 @@ async function one(db, query, inputs = {}) {
   for (const [name, [type, value]] of Object.entries(inputs)) request.input(name, type, value);
   const result = await request.query(query);
   return result.recordset[0];
-}
-
-// Saves uploaded files to Blob Storage and records them on the ticket.
-async function saveAttachments(db, ticketId, conversationId, files, userId) {
-  for (const file of files) {
-    const safeName = file.name.replace(/[^\w.\- ]+/g, "_");
-    const blobPath = `tickets/${ticketId}/${randomUUID()}-${safeName}`;
-    await uploadFile(blobPath, file.buffer, file.type);
-    await db
-      .request()
-      .input("TicketId", sql.Int, ticketId)
-      .input("ConversationId", sql.Int, conversationId)
-      .input("FileName", sql.NVarChar(255), file.name)
-      .input("ContentType", sql.NVarChar(150), file.type.slice(0, 150))
-      .input("SizeBytes", sql.BigInt, file.buffer.length)
-      .input("BlobPath", sql.NVarChar(500), blobPath)
-      .input("UploadedById", sql.Int, userId)
-      .query(`
-        INSERT INTO dbo.Attachments (TicketId, ConversationId, FileName, ContentType, SizeBytes, BlobPath, UploadedById)
-        VALUES (@TicketId, @ConversationId, @FileName, @ContentType, @SizeBytes, @BlobPath, @UploadedById)
-      `);
-  }
 }
 
 function readIdList(value, field) {
@@ -155,6 +136,8 @@ endpoint("listTickets", { methods: ["GET"], route: "tickets" }, async (request, 
 
   if (scope === "mine") {
     where.push("(t.RequesterId = @Me OR t.ForUserId = @Me)");
+  } else {
+    where.push(FOR_IT_SQL);
   }
   req.input("Me", sql.Int, user.Id);
 
@@ -196,7 +179,7 @@ endpoint("listTickets", { methods: ["GET"], route: "tickets" }, async (request, 
     SELECT TOP (500) * FROM (${TICKET_SELECT} ${where.length ? `WHERE ${where.join(" AND ")}` : ""}) x
     ORDER BY x.IsClosed, x.CreatedAt DESC
   `);
-  return { jsonBody: result.recordset.map(({ Description, ...t }) => withNumber(t)) };
+  return { jsonBody: result.recordset.map(({ Description, ...t }) => forViewer(t, user)) };
 });
 
 // ---------------------------------------------------------------------------
@@ -232,7 +215,10 @@ endpoint(
     };
 
     const subject = requiredText(data.subject, "Subject", 255);
-    const description = requiredText(data.description, "Description", 20000);
+    const draft = typeof data.description === "string" ? data.description : "";
+    if (!hasContent(draft)) throw new HttpError(400, "Description is required");
+    if (draft.length > 200000) throw new HttpError(400, "The description is too long");
+    const inlineNames = readInlineNames(data.inline);
     const priorityId = optionalId(data.priorityId, "Priority") || settings.DefaultPriorityId;
     const cc = emailList(data.cc, "CC");
 
@@ -318,7 +304,7 @@ endpoint(
             TechnicianId: [sql.Int, technicianId],
             DepartmentId: [sql.Int, requester.DepartmentId],
             Subject: [sql.NVarChar(255), subject],
-            Description: [sql.NVarChar(sql.MAX), description],
+            Description: [sql.NVarChar(sql.MAX), ""],
             StartDate: [sql.Date, startDate],
             EndDate: [sql.Date, endDate]
           }
@@ -350,7 +336,11 @@ endpoint(
         if (type.UsesChecklist && checklistSource === "offboarding") await addRemovalChecklist(tx, id, forUserId, order);
         else if (type.UsesChecklist && forUserId) await addRemovalChecklist(tx, id, forUserId, order, removals);
 
-        await saveAttachments(tx, id, null, files, user.Id);
+        const saved = await saveAttachments(tx, id, null, files, user.Id, inlineNames);
+        const description = await finishRichText(tx, id, draft, saved);
+        if (!description) throw new HttpError(400, "Description is required");
+        await tx.request().input("Id", sql.Int, id).input("Description", sql.NVarChar(sql.MAX), description)
+          .query("UPDATE dbo.Tickets SET Description = @Description WHERE Id = @Id");
         await recordEvents(tx, id, user.Id, [{ field: "Created", oldValue: null, newValue: type.Name }]);
         if (forUserId) {
           await logChange(tx, {
@@ -370,7 +360,7 @@ endpoint(
     // Outgoing email ("ticket received", IT team notice) comes with the email
     // step of the build; see the README.
     const ticket = await loadTicket(pool, ticketId);
-    return { status: 201, jsonBody: { ticket: withNumber(ticket), warnings } };
+    return { status: 201, jsonBody: { ticket: forViewer(ticket, user), warnings } };
   }
 );
 
@@ -383,65 +373,89 @@ endpoint("getTicket", { methods: ["GET"], route: "tickets/{id:int}" }, async (re
   const ticket = await loadVisibleTicket(pool, Number(request.params.id), user);
   const id = ticket.Id;
   const tech = user.IsTechnician;
+  const access = accessOf(user, ticket);
+  // Notes this person may read: technicians all of them, HR their own kind
+  const notes = access.technicianNotes ? "" : access.hrNotes ? "AND (c.IsTechnicianNote = 0 OR c.VisibleToEventManagers = 1)" : "AND c.IsTechnicianNote = 0";
 
   const conversations = await pool.request().input("Id", sql.Int, id).query(`
     SELECT c.Id, c.AuthorId, ${personName("u")} AS AuthorName, u.Email AS AuthorEmail,
-           c.Body, c.IsTechnicianNote, c.Direction, c.CreatedAt
+           c.Body, c.IsTechnicianNote, c.VisibleToEventManagers, c.Direction, c.CreatedAt
     FROM dbo.TicketConversations c
     JOIN dbo.Users u ON u.Id = c.AuthorId
-    WHERE c.TicketId = @Id ${tech ? "" : "AND c.IsTechnicianNote = 0"}
+    WHERE c.TicketId = @Id ${notes}
     ORDER BY c.CreatedAt, c.Id
   `);
   const attachments = await pool.request().input("Id", sql.Int, id).query(`
     SELECT a.Id, a.ConversationId, a.FileName, a.ContentType, a.SizeBytes, a.CreatedAt
     FROM dbo.Attachments a
     LEFT JOIN dbo.TicketConversations c ON c.Id = a.ConversationId
-    WHERE a.TicketId = @Id ${tech ? "" : "AND (c.Id IS NULL OR c.IsTechnicianNote = 0)"}
+    WHERE a.TicketId = @Id AND a.IsInline = 0 AND (c.Id IS NULL OR (1 = 1 ${notes}))
     ORDER BY a.CreatedAt, a.Id
   `);
   const cc = await pool.request().input("Id", sql.Int, id).query("SELECT Email FROM dbo.TicketCc WHERE TicketId = @Id ORDER BY Email");
-  const items = await pool.request().input("Id", sql.Int, id).query(`
-    SELECT ti.Id, ti.InventoryItemId, i.Name, ti.Quantity,
-           ${tech ? "ti.UnitCostAtTime, ti.Quantity * ti.UnitCostAtTime AS TotalCost," : ""} ti.OutAt, ti.ReturnedAt
-    FROM dbo.TicketItems ti
-    JOIN dbo.InventoryItems i ON i.Id = ti.InventoryItemId
-    WHERE ti.TicketId = @Id
-    ORDER BY i.Name
-  `);
-  const checklist = await pool.request().input("Id", sql.Int, id).query(`
-    SELECT ci.Id, ci.Label, ci.IsDone, ci.IsRemoval, ci.DoneAt, ${personName("u")} AS DoneByName, ci.SortOrder
-    FROM dbo.ChecklistItems ci
-    LEFT JOIN dbo.Users u ON u.Id = ci.DoneById
-    WHERE ci.TicketId = @Id
-    ORDER BY ci.SortOrder, ci.Id
-  `);
-  // The event booking this ticket holds the equipment for, if any
-  const booking = await pool.request().input("Id", sql.Int, id).query(`
-    SELECT TOP (1) b.Id, b.Title, b.StartAt, b.EndAt, rm.Name AS RoomName, bs.Name AS StatusName
-    FROM dbo.EventBookings b
-    JOIN dbo.Rooms rm ON rm.Id = b.RoomId
-    JOIN dbo.BookingStatuses bs ON bs.Id = b.BookingStatusId
-    WHERE b.TicketId = @Id
-  `);
-  const events = tech
+  const items = access.equipment
     ? (await pool.request().input("Id", sql.Int, id).query(`
-        SELECT e.Id, e.Field, e.OldValue, e.NewValue, e.[At], ${personName("u")} AS ActorName
-        FROM dbo.TicketEvents e
-        LEFT JOIN dbo.Users u ON u.Id = e.ActorId
-        WHERE e.TicketId = @Id
-        ORDER BY e.[At], e.Id
+        SELECT ti.Id, ti.InventoryItemId, i.Name, ti.Quantity,
+               ${tech ? "ti.UnitCostAtTime, ti.Quantity * ti.UnitCostAtTime AS TotalCost," : ""} ti.OutAt, ti.ReturnedAt
+        FROM dbo.TicketItems ti
+        JOIN dbo.InventoryItems i ON i.Id = ti.InventoryItemId
+        WHERE ti.TicketId = @Id
+        ORDER BY i.Name
       `)).recordset
     : [];
+  const checklist = access.equipment
+    ? (await pool.request().input("Id", sql.Int, id).query(`
+        SELECT ci.Id, ci.Label, ci.IsDone, ci.IsRemoval, ci.DoneAt, ${personName("u")} AS DoneByName, ci.SortOrder
+        FROM dbo.ChecklistItems ci
+        LEFT JOIN dbo.Users u ON u.Id = ci.DoneById
+        WHERE ci.TicketId = @Id
+        ORDER BY ci.SortOrder, ci.Id
+      `)).recordset
+    : [];
+  // Technicians see the whole history; HR the lines about the room and event
+  let events = [];
+  if (tech || access.roomOnlyView) {
+    const req = pool.request().input("Id", sql.Int, id);
+    const only = tech ? "" : `AND e.Field IN (${ROOM_FIELDS.map((f, i) => { req.input(`F${i}`, sql.NVarChar(50), f); return `@F${i}`; }).join(", ")})`;
+    events = (await req.query(`
+      SELECT e.Id, e.Field, e.OldValue, e.NewValue, e.[At], CASE WHEN u.Id IS NOT NULL THEN ${personName("u")} END AS ActorName
+      FROM dbo.TicketEvents e
+      LEFT JOIN dbo.Users u ON u.Id = e.ActorId
+      WHERE e.TicketId = @Id ${only}
+      ORDER BY e.[At], e.Id
+    `)).recordset;
+  }
+  // Another active booking for the same room at an overlapping time: a hint
+  // for HR, who decide
+  let hasOverlap = false;
+  if (ticket.HasRoom && ticket.IsActiveBooking && user.IsEventManager) {
+    const overlap = await pool.request().input("Id", sql.Int, id).query(`
+      SELECT TOP (1) 1 AS X
+      FROM dbo.TicketRooms me
+      JOIN dbo.Tickets mt ON mt.Id = me.TicketId
+      JOIN dbo.TicketRooms o ON o.RoomId = me.RoomId AND o.TicketId <> me.TicketId
+      JOIN dbo.BookingStatuses os ON os.Id = o.BookingStatusId AND os.IsActiveBooking = 1
+      JOIN dbo.Tickets ot ON ot.Id = o.TicketId
+      WHERE me.TicketId = @Id AND ot.StartAt < mt.EndAt AND ot.EndAt > mt.StartAt
+    `);
+    hasOverlap = overlap.recordset.length > 0;
+  }
 
   return {
     jsonBody: {
-      ticket: withNumber(ticket),
+      ticket: { ...forViewer(ticket, user), HasOverlap: hasOverlap },
+      access: {
+        equipment: access.equipment,
+        technicianNotes: access.technicianNotes,
+        hrNotes: access.hrNotes,
+        roomOnlyView: access.roomOnlyView,
+        canDecideRoom: !!user.IsAdmin || (!!user.IsEventManager && !user.IsTechnician)
+      },
       conversations: conversations.recordset,
       attachments: attachments.recordset,
       cc: cc.recordset.map((r) => r.Email),
-      items: items.recordset,
-      checklist: checklist.recordset,
-      booking: booking.recordset[0] || null,
+      items,
+      checklist,
       events
     }
   };
@@ -546,7 +560,7 @@ endpoint(
 
     // The survey email on close comes with the email step of the build.
     const pool = await getConnection();
-    return { jsonBody: { ticket: withNumber(await loadTicket(pool, id)), warnings } };
+    return { jsonBody: { ticket: forViewer(await loadTicket(pool, id), user), warnings } };
   }
 );
 

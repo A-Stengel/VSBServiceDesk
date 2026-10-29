@@ -24,13 +24,17 @@ function claim(principal, ...types) {
   return undefined;
 }
 
-function isAllowedEmail(email) {
-  const allowed = (process.env.ALLOWED_EMAIL_DOMAINS || "vsb.org")
+// The staff email domains (the StaffEmailDomains setting, comma separated).
+// The ALLOWED_EMAIL_DOMAINS app setting is only a fallback for a database
+// that doesn't have the setting yet.
+function staffDomains(settings) {
+  return String(settings.StaffEmailDomains || process.env.ALLOWED_EMAIL_DOMAINS || "")
     .split(",")
-    .map((d) => d.trim().toLowerCase())
+    .map((d) => d.trim().toLowerCase().replace(/^@/, ""))
     .filter(Boolean);
-  return allowed.includes(email.split("@")[1]);
 }
+
+const isStaffEmail = (settings, email) => staffDomains(settings).includes(email.split("@")[1]);
 
 function namesFor(principal, email) {
   const first = claim(principal, "given_name", "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/givenname");
@@ -68,13 +72,15 @@ async function getCurrentUser(request) {
   const principal = getPrincipal(request);
   const email = principal?.userDetails?.trim().toLowerCase();
   if (!email || !email.includes("@")) throw new HttpError(401, "Please sign in");
-  if (!isAllowedEmail(email)) throw new HttpError(403, "Only VSB staff accounts can use this site");
+  const settings = await getSettings();
+  if (!isStaffEmail(settings, email)) {
+    throw new HttpError(403, `Only ${settings.OrganizationName ? `${settings.OrganizationName} ` : ""}staff accounts can use this site`);
+  }
 
   const pool = await getConnection();
   let user = await findUserByEmail(pool, email);
 
   if (!user) {
-    const settings = await getSettings();
     const { firstName, lastName, displayName } = namesFor(principal, email);
     try {
       await pool
@@ -100,4 +106,4 @@ async function getCurrentUser(request) {
   return user;
 }
 
-module.exports = { getCurrentUser, USER_SELECT };
+module.exports = { getCurrentUser, USER_SELECT, isStaffEmail };

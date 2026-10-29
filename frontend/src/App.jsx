@@ -5,6 +5,7 @@ import Icon from "./components/Icon.jsx";
 import Logo, { updateTabIcon } from "./components/Logo.jsx";
 import LoadingScreen, { ATTEMPTS } from "./components/LoadingScreen.jsx";
 import { MODE_NAMES, getAppearance, onAppearanceChange, setAppearance } from "./theme.js";
+import { organization, rememberOrganization } from "./organization.js";
 import Home from "./pages/Home.jsx";
 import SubmitRequest from "./pages/SubmitRequest.jsx";
 import Tickets from "./pages/Tickets.jsx";
@@ -15,7 +16,6 @@ import Inventory from "./pages/Inventory.jsx";
 import Settings from "./pages/Settings.jsx";
 import BookEvent from "./pages/BookEvent.jsx";
 import Rentals from "./pages/Rentals.jsx";
-import BookingPage from "./pages/BookingPage.jsx";
 
 // The signed-in person, every pick-list and the message banner, shared by
 // every page.
@@ -49,6 +49,7 @@ export function rolesOf(me) {
 // Microsoft on its own, so a failed sign-in shows here instead of looping.
 function SignIn() {
   const tried = sessionStorage.getItem(SIGN_IN_TRIED);
+  const domain = organization().staffDomains.split(",")[0].trim();
   const start = () => {
     sessionStorage.setItem(SIGN_IN_TRIED, "1");
     window.location.href = "/.auth/login/aad?post_login_redirect_uri=" + encodeURIComponent(window.location.pathname);
@@ -56,14 +57,14 @@ function SignIn() {
   return (
     <main className="page">
       <div className="card" style={{ maxWidth: 520 }}>
-        <h1>VSB Service Desk</h1>
+        <h1>{organization().appName}</h1>
         {tried && (
           <p className="error">
             Microsoft signed you in, but the site didn&apos;t finish the sign-in. Check the Static Web App&apos;s
             AZURE_CLIENT_ID and AZURE_CLIENT_SECRET settings and the app registration (README Steps 4 and 5).
           </p>
         )}
-        <p>Sign in with your @vsb.org Microsoft account.</p>
+        <p>Sign in with your {domain ? `@${domain} ` : "work "}Microsoft account.</p>
         <button className="btn pri" onClick={start}>Sign in</button>
       </div>
     </main>
@@ -79,7 +80,7 @@ function Header({ me }) {
     return (
       <header className="topbar">
         <div className="topbar-inner">
-          <span className="hbtn brand"><Logo size={36} />VSB Service Desk</span>
+          <span className="hbtn brand"><Logo size={36} />{organization().appName}</span>
           <div className="top-actions placeholders" aria-hidden="true"><span className="b" /><span className="a" /><span className="n" /></div>
         </div>
       </header>
@@ -90,6 +91,7 @@ function Header({ me }) {
 
 function SignedInHeader({ me }) {
   const roles = rolesOf(me);
+  const appName = useApp()?.lookups?.organization?.appName || organization().appName;
   const [open, setOpen] = useState(false);
   const menu = useRef(null);
   useEffect(() => {
@@ -104,7 +106,7 @@ function SignedInHeader({ me }) {
       <div className="topbar-inner">
         <Link to="/" className="hbtn brand">
           <Logo size={36} />
-          VSB Service Desk
+          {appName}
         </Link>
         <div className="top-actions">
           <Link to="/new" className="btn submit">
@@ -175,7 +177,6 @@ const CRUMBS = [
   [/^\/tickets\/\d+/, "Ticket"],
   [/^\/tickets/, "Tickets"],
   [/^\/events\/new/, "Equipment Rental / Event Booking"],
-  [/^\/events\/\d+/, "Rental or event"],
   [/^\/events/, "Rentals & Events"],
   [/^\/people\/\d+/, "Person"],
   [/^\/people/, "People"],
@@ -191,7 +192,6 @@ function Crumbs({ me }) {
   if (label === "Rentals & Events" && rolesOf(me).eventManagerOnly) label = "Event bookings";
   const parent = pathname.startsWith("/people/") ? ["/people", "People"]
     : pathname.startsWith("/tickets/") ? ["/tickets", "Tickets"]
-    : /^\/events\/\d+/.test(pathname) ? ["/events", rolesOf(me).eventManagerOnly ? "Event bookings" : "Rentals & Events"]
     : null;
   return (
     <nav aria-label="Breadcrumb" className="crumbs">
@@ -227,6 +227,9 @@ export default function App() {
   const [toast, setToast] = useState(null);
   const { pathname } = useLocation();
   const reloadLookups = useCallback(() => api.lookups().then(setLookups), []);
+  useEffect(() => {
+    if (lookups?.organization) rememberOrganization(lookups.organization);
+  }, [lookups]);
   // A message stays through the navigation that follows it, then clears on
   // the next page change.
   const notify = useCallback((text, bad = false) => {
@@ -315,7 +318,8 @@ export default function App() {
           <Route path="/events" element={<Rentals />} />
           <Route path="/events/new" element={<BookEvent />} />
           <Route path="/events/mine" element={<Navigate to="/events" replace />} />
-          <Route path="/events/:id" element={<BookingPage />} />
+          {/* Bookings used to have their own page; they're tickets now */}
+          <Route path="/events/:id" element={<Navigate to="/events" replace />} />
           {roles.technician && <Route path="/people" element={<People />} />}
           {roles.technician && <Route path="/people/:id" element={<Person />} />}
           {roles.technician && <Route path="/inventory" element={<Inventory />} />}
