@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { api } from "../api.js";
 import { useApp } from "../App.jsx";
 import ItemsPicker from "./ItemsPicker.jsx";
+import RichEditor from "./RichEditor.jsx";
+import RichText from "./RichText.jsx";
 
 export const emptyBooking = {
   title: "",
@@ -16,13 +18,14 @@ export const emptyBooking = {
   items: []
 };
 
-// The event booking form, matching the Power App's Event Booking form. Used
-// to book and to change a booking. "canChangeItems" is false for Event
-// Managers, who handle the room but not the equipment.
+// The Equipment Rental / Event Booking form, matching the Power App's Event
+// Booking form. Used to make a request and to change one. "canChangeItems"
+// is false for Event Managers, who handle the room but not the equipment.
 //
-// With roomOptional (a new request), "No room needed" makes it an equipment
-// rental only; onSubmit then gets roomId null.
-export default function BookingForm({ initial, submitLabel, onSubmit, onCancel, canChangeItems = true, excludeTicketId, roomOptional = false, showGuidelinesButton = true }) {
+// With roomOptional, "No room needed" makes it an equipment rental only;
+// onSubmit then gets roomId null. The comments are rich text and can hold
+// pasted pictures (see withPastedImages).
+export default function BookingForm({ initial, submitLabel, onSubmit, onCancel, canChangeItems = true, excludeTicketId, roomOptional = false, showGuidelinesButton = true, commentsLabel = "User Comments" }) {
   const { lookups } = useApp();
   const [form, setForm] = useState(initial || emptyBooking);
   const [available, setAvailable] = useState(null);
@@ -130,17 +133,18 @@ export default function BookingForm({ initial, submitLabel, onSubmit, onCancel, 
         {canChangeItems ? (
           <>
             <ItemsPicker inventory={lookups.inventoryItems} value={form.items} onChange={(items) => setForm({ ...form, items })} available={available} />
-            <p className="muted small">{roomOptional ? "Optional. IT checks the equipment out to you and marks it returned." : "Picking any equipment sends a request to IT, linked to this booking."}</p>
+            <p className="muted small">Optional. Picking equipment sends the request to IT too. IT checks it out to you and marks it returned.</p>
           </>
         ) : (
-          <p className="muted small">Only the person who booked it or IT can change the equipment.</p>
+          <p className="muted small">Only the person who asked for it or IT can change the equipment, and only until it has been handed out.</p>
         )}
       </fieldset>
 
-      <label>
-        User Comments
-        <textarea rows={4} value={form.comments} onChange={set("comments")} maxLength={4000} placeholder="Notes for HR or IT" />
-      </label>
+      <div className="field">
+        <span>{commentsLabel}</span>
+        <RichEditor value={form.comments} onChange={(comments) => setForm((f) => ({ ...f, comments }))} images
+          label={commentsLabel} placeholder="Notes for HR or IT" minHeight={100} onError={setError} />
+      </div>
 
       {error && <p className="error">{error}</p>}
       <div className="row">
@@ -152,7 +156,7 @@ export default function BookingForm({ initial, submitLabel, onSubmit, onCancel, 
         <div className="dialog-backdrop" onClick={() => setShowGuidelines(false)}>
           <div className="card dialog" onClick={(e) => e.stopPropagation()}>
             <h2>Guidelines</h2>
-            <div className="body">{lookups.eventGuidelines || "No guidelines have been written yet."}</div>
+            <RichText value={lookups.eventGuidelines} empty={<p className="muted">No guidelines have been written yet.</p>} />
             <button type="button" className="btn" onClick={() => setShowGuidelines(false)}>Close</button>
           </div>
         </div>

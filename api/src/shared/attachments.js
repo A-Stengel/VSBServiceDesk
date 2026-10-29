@@ -3,6 +3,10 @@ const { sql } = require("./db");
 const { uploadFile } = require("./storage");
 const { sanitizeRich } = require("./richtext");
 
+// Picture types that can show inside the text (not SVG, which can carry
+// script).
+const INLINE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+
 // Saves uploaded files to Blob Storage and records them on the ticket. Files
 // named in "inlineNames" are images pasted into the text: they're marked
 // IsInline, so they show in the text rather than the attachment list.
@@ -13,7 +17,7 @@ async function saveAttachments(db, ticketId, conversationId, files, userId, inli
     const safeName = file.name.replace(/[^\w.\- ]+/g, "_");
     const blobPath = `tickets/${ticketId}/${randomUUID()}-${safeName}`;
     const inline = inlineNames.includes(file.name);
-    if (inline && !file.type.startsWith("image/")) continue;
+    if (inline && !INLINE_TYPES.includes(file.type)) continue;
     await uploadFile(blobPath, file.buffer, file.type);
     const result = await db
       .request()
@@ -54,4 +58,4 @@ function readInlineNames(value) {
   return value.filter((name) => typeof name === "string").slice(0, 20);
 }
 
-module.exports = { saveAttachments, finishRichText, readInlineNames };
+module.exports = { saveAttachments, finishRichText, readInlineNames, INLINE_TYPES };

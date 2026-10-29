@@ -122,7 +122,7 @@ export default function Home() {
             {data && !data.activity.length && <p className="empty">Nothing yet.</p>}
             {!data && !error && <p className="empty">Loading…</p>}
             {data?.activity.map((a, i) => (
-              <Link key={i} className="act" to={a.kind === "ticket" ? `/tickets/${a.id}` : `/events/${a.id}`}>
+              <Link key={i} className="act" to={`/tickets/${a.id}`}>
                 <span className="row center" style={{ gap: 8 }}>
                   <span className="dot" style={{ background: a.kind === "ticket" ? "var(--acc)" : "#7a5bb5" }} />
                   <span className="muted small">{timeAgo(a.at)}</span>

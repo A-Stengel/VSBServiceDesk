@@ -3,6 +3,9 @@ import { useSearchParams } from "react-router-dom";
 import { api, formatDate } from "../api.js";
 import { useApp } from "../App.jsx";
 import Logo, { logoChanged } from "../components/Logo.jsx";
+import RichEditor from "../components/RichEditor.jsx";
+import { plainToRich } from "../richtext.js";
+import { organization } from "../organization.js";
 import {
   COLOR_FIELDS, DEFAULT_COLORS, colorsFor, isColor, readabilityProblems, setAppearance, themeVars
 } from "../theme.js";
@@ -27,6 +30,7 @@ const SECTIONS = [
   { key: "bookingStatuses", label: "Room statuses", table: "bookingStatuses", eventManagers: true },
   { key: "equipmentStatuses", label: "Equipment statuses", table: "equipmentStatuses" },
   { group: "Organization" },
+  { key: "organization", label: "Name, time zone and mailbox", history: "organization" },
   { key: "departments", label: "Departments", table: "departments" },
   { key: "holidays", label: "Holidays", table: "holidays" },
   { group: "Email" },
@@ -35,7 +39,6 @@ const SECTIONS = [
   { key: "templates", label: "Email templates", history: "templates" },
   { group: "Inventory and team" },
   { key: "onboarding", label: "Onboarding defaults", history: "inventoryItems,software" },
-  { key: "lowStock", label: "Low-stock warning", history: "lowStock" },
   { key: "sharedViews", label: "Shared views" },
   { group: "System" },
   { key: "appearance", label: "Appearance", history: "appearance" },
@@ -61,6 +64,7 @@ const DESCRIPTIONS = {
   roles: "What someone can do comes from the Technician, Admin and Event manager ticks.",
   userTypes: "Staff sign in; outside people and shared mailboxes only email in.",
   billingPeriods: "How often a license is billed, for the monthly cost on the Inventory page.",
+  organization: "Who this service desk is for. Change these to set the app up for another organization.",
   appearance: "The colors for light mode and dark mode. Everyone picks Light, Dark or Match device from the menu under their name.",
   logo: "Shown in the header, on the loading screen and in the browser tab. A square PNG with a transparent background looks best."
 };
@@ -134,8 +138,8 @@ function Section({ section, onChange }) {
       return <Templates onChange={onChange} />;
     case "onboarding":
       return <OnboardingDefaults onChange={onChange} />;
-    case "lowStock":
-      return <SettingsForm keys={["LowStockThreshold"]} onChange={onChange} note="On the Inventory page, Available turns orange at or below this number." />;
+    case "organization":
+      return <SettingsForm keys={ORGANIZATION_KEYS} onChange={onChange} notes={ORGANIZATION_NOTES} />;
     case "sharedViews":
       return <SharedViews />;
     case "appearance":
@@ -229,7 +233,7 @@ function AppearanceSettings({ onChange }) {
         </div>
         <div className="stack" style={{ minWidth: 0 }}>
           <div className="preview" style={themeVars(colors, tab)} aria-label={`Preview of ${tab} mode`}>
-            <div className="topbar"><span>VSB Service Desk</span><span className="btn submit sm">Submit a request</span></div>
+            <div className="topbar"><span>{organization().appName}</span><span className="btn submit sm">Submit a request</span></div>
             <div className="preview-body">
               <div className="card">
                 <h3>Ticket 0010042</h3>
@@ -298,7 +302,7 @@ function LogoSettings({ onChange }) {
   return (
     <div className="form">
       <div className="logo-preview">
-        <div className="on-dark"><Logo size={36} />VSB Service Desk</div>
+        <div className="on-dark"><Logo size={36} />{organization().appName}</div>
         <Logo size={84} className="boot-logo" />
       </div>
       <label>
@@ -308,7 +312,7 @@ function LogoSettings({ onChange }) {
       </label>
       <div className="row">
         <button className="btn pri" disabled={!file || busy} onClick={() => save(() => api.uploadLogo(file), "Logo saved.")}>Upload logo</button>
-        <button className="btn" disabled={busy} onClick={() => save(api.resetLogo, "Back to the built-in VSB seal.")}>Use the built-in VSB seal</button>
+        <button className="btn" disabled={busy} onClick={() => save(api.resetLogo, "Back to the built-in logo.")}>Use the built-in logo</button>
       </div>
     </div>
   );
@@ -653,11 +657,28 @@ function useSettings() {
   return { data, setData, error };
 }
 
-const SECTION_KEYS = ["EmailSwitch", "RequesterReplyStatusId", "WarningBusinessDays", "CloseBusinessDays", "ITTeamEmails", "HREmails", "LowStockThreshold", "EventGuidelines"];
+const ORGANIZATION_KEYS = ["AppName", "OrganizationName", "TimeZone", "StaffEmailDomains", "MailboxAddress", "TestingMailboxAddress"];
+const ORGANIZATION_NOTES = {
+  AppName: "Shown in the header, on the sign-in page and in the browser tab.",
+  OrganizationName: "Used in messages, like \"Only [organization] staff accounts can use this site\".",
+  TimeZone: "Event times, and when room-only bookings close after the event.",
+  StaffEmailDomains: "Who can sign in, and who counts as staff when a ticket is logged for someone. Your own domain must stay in the list.",
+  MailboxAddress: "The shared mailbox tickets are emailed to and every email is sent from.",
+  TestingMailboxAddress: "Used while the app is in maintenance mode: mail is read from and sent to this address only. Maintenance mode comes with the email settings."
+};
+const SECTION_KEYS = ["EmailSwitch", "RequesterReplyStatusId", "WarningBusinessDays", "CloseBusinessDays", "ITTeamEmails", "HREmails", "EventGuidelines", ...ORGANIZATION_KEYS];
 
 // keys: the settings to show. exclude: everything not shown in another
 // section (Other settings).
-function SettingsForm({ keys, exclude, note, onChange }) {
+const timeZones = () => {
+  try {
+    return Intl.supportedValuesOf("timeZone");
+  } catch {
+    return [];
+  }
+};
+
+function SettingsForm({ keys, exclude, note, notes = {}, onChange }) {
   const { lookups, reloadLookups, notify } = useApp();
   const { data, setData, error } = useSettings();
   const [values, setValues] = useState(null);
@@ -667,7 +688,9 @@ function SettingsForm({ keys, exclude, note, onChange }) {
 
   if (error) return <p className="error">{error}</p>;
   if (!data || !values) return <p className="muted">Loading…</p>;
-  const metas = data.meta.filter((m) => (exclude ? !SECTION_KEYS.includes(m.key) && !m.template : keys.includes(m.key)));
+  const metas = exclude
+    ? data.meta.filter((m) => !SECTION_KEYS.includes(m.key) && !m.template)
+    : keys.map((key) => data.meta.find((m) => m.key === key)).filter(Boolean);
 
   async function save(e) {
     e.preventDefault();
@@ -703,9 +726,19 @@ function SettingsForm({ keys, exclude, note, onChange }) {
             <input type="number" min="0" value={values[m.key] ?? ""} onChange={(e) => setValues({ ...values, [m.key]: e.target.value })} />
           )}
           {m.type === "text" && <input value={values[m.key] ?? ""} onChange={(e) => setValues({ ...values, [m.key]: e.target.value })} />}
+          {m.type === "email" && (
+            <input type="email" value={values[m.key] ?? ""} onChange={(e) => setValues({ ...values, [m.key]: e.target.value })} />
+          )}
+          {m.type === "timezone" && (
+            <select value={values[m.key] ?? ""} onChange={(e) => setValues({ ...values, [m.key]: e.target.value })}>
+              {!timeZones().includes(values[m.key]) && <option value={values[m.key] ?? ""}>{values[m.key] || "Choose"}</option>}
+              {timeZones().map((zone) => <option key={zone} value={zone}>{zone.replace(/_/g, " ")}</option>)}
+            </select>
+          )}
           {m.type === "longtext" && (
             <textarea rows={5} maxLength={4000} value={values[m.key] ?? ""} onChange={(e) => setValues({ ...values, [m.key]: e.target.value })} />
           )}
+          {notes[m.key] && <span className="muted small" style={{ fontWeight: 400 }}>{notes[m.key]}</span>}
         </label>
       ))}
       {note && <p className="muted small" style={{ margin: 0 }}>{note}</p>}
@@ -759,7 +792,7 @@ function Templates({ onChange }) {
 
 function Guidelines({ onChange }) {
   const { lookups, reloadLookups, notify } = useApp();
-  const [text, setText] = useState(lookups.eventGuidelines || "");
+  const [text, setText] = useState(plainToRich(lookups.eventGuidelines || ""));
   async function save(e) {
     e.preventDefault();
     try {
@@ -774,7 +807,7 @@ function Guidelines({ onChange }) {
   return (
     <form className="form" onSubmit={save}>
       <p className="muted small" style={{ margin: 0 }}>Shown next to the Equipment Rental / Event Booking form.</p>
-      <textarea rows={10} value={text} maxLength={4000} onChange={(e) => setText(e.target.value)} aria-label="Booking guidelines" />
+      <RichEditor value={text} onChange={setText} label="Booking guidelines" minHeight={220} />
       <div><button className="btn pri">Save guidelines</button></div>
     </form>
   );

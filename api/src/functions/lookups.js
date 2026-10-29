@@ -51,7 +51,8 @@ endpoint("getLookups", { methods: ["GET"], route: "lookups" }, async (request, c
         appName: settings.AppName || "Service Desk",
         organizationName: settings.OrganizationName || "",
         timeZone: settings.TimeZone || "America/New_York",
-        mailboxAddress: settings.MailboxAddress || ""
+        mailboxAddress: settings.MailboxAddress || "",
+        staffDomains: settings.StaffEmailDomains || ""
       }
     }
   };

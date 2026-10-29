@@ -1,41 +1,66 @@
 import { useCallback, useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
 import { api, dayValue, formatDate, formatDay, formatWallRange, money } from "../api.js";
 import { useApp } from "../App.jsx";
 import PersonPicker from "../components/PersonPicker.jsx";
+import BookingForm from "../components/BookingForm.jsx";
+import RichEditor from "../components/RichEditor.jsx";
+import RichText from "../components/RichText.jsx";
+import { hasContent, plainToRich, withPastedImages } from "../richtext.js";
 
+// One ticket. An Equipment Rental / Event Booking ticket also has an event
+// panel: the event's details and its room, which HR (Event Managers)
+// confirms or declines. HR sees only that part: the event, the room, replies,
+// HR notes and the room's history, but no equipment, technician notes,
+// status or technician.
 export default function TicketPage() {
   const { id } = useParams();
-  const { me } = useApp();
+  const { me, lookups } = useApp();
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
+  const [editing, setEditing] = useState(false);
 
   const load = useCallback(() => {
     api.ticket(id).then(setData).catch((e) => setError(e.message));
   }, [id]);
   useEffect(load, [load]);
+  useEffect(() => setEditing(false), [id]);
 
   if (error) return <p className="error">{error}</p>;
   if (!data) return <p className="muted">Loading…</p>;
-  const { ticket } = data;
+  const { ticket, access } = data;
 
   const isTech = me.IsTechnician;
+  const hrView = access.roomOnlyView;
+  const isBooking = ticket.TicketTypeId === lookups.defaults.bookingTicketTypeId && (ticket.HasRoom || ticket.StartAt);
+  const noteLabel = (c) => (c.VisibleToEventManagers ? "HR note (the requester can't see this)" : "Internal note (only technicians see this)");
+
   return (
     <div className="split">
       <div>
         <div className="card">
           <div className="muted small">
-            #{ticket.Number} · {ticket.TicketTypeName}{ticket.CategoryName ? ` · ${ticket.CategoryName}` : ""}
+            #{ticket.Number} · {hrView ? "Event booking" : ticket.TicketTypeName}{ticket.CategoryName ? ` · ${ticket.CategoryName}` : ""}
             {ticket.LegacyId ? ` · imported ${ticket.LegacyId}` : ""}
           </div>
           <h1 style={{ margin: "4px 0 6px" }}>{ticket.Subject}</h1>
           <div className="row center" style={{ gap: 8, marginBottom: 12 }}>
-            <span className="pill" style={{ background: ticket.StatusColor || undefined }}>{ticket.StatusName}</span>
+            {hrView
+              ? <span className="pill" style={{ background: ticket.RoomStatusColor || undefined }}>Room {String(ticket.RoomStatusName).toLowerCase()}</span>
+              : <span className="pill" style={{ background: ticket.StatusColor || undefined }}>{ticket.StatusName}</span>}
+            {hrView && ticket.IsClosed && <span className="pill">Closed</span>}
             <span className="muted small">
-              {ticket.RequesterName} ({ticket.RequesterEmail}) · {formatDate(ticket.CreatedAt)} · via {ticket.SourceName}
+              {ticket.RequesterName} ({ticket.RequesterEmail}) · {formatDate(ticket.CreatedAt)}{hrView ? "" : ` · via ${ticket.SourceName}`}
             </span>
           </div>
-          <div className="body">{ticket.Description}</div>
+          {editing ? (
+            <EditBooking ticket={ticket} access={access} items={data.items} onDone={(saved) => { setEditing(false); if (saved) load(); }} />
+          ) : (
+            <>
+              {isBooking && ticket.Description && <h3 style={{ margin: "0 0 6px" }}>Comments</h3>}
+              <RichText value={ticket.Description} />
+            </>
+          )}
           <Files attachments={data.attachments.filter((a) => !a.ConversationId)} />
           {data.cc.length > 0 && <p className="muted small">CC: {data.cc.join(", ")}</p>}
         </div>
@@ -44,32 +69,26 @@ export default function TicketPage() {
           <div key={c.Id} className={`card message ${c.IsTechnicianNote ? "note" : c.Direction === "out" ? "out" : ""}`}>
             <div className="meta">
               <strong>{c.AuthorName}</strong> · {formatDate(c.CreatedAt)}
-              {c.IsTechnicianNote && " · Internal note (the requester can't see this)"}
+              {c.IsTechnicianNote && ` · ${noteLabel(c)}`}
             </div>
-            <div className="body">{c.Body}</div>
+            <RichText value={c.Body} />
             <Files attachments={data.attachments.filter((a) => a.ConversationId === c.Id)} />
           </div>
         ))}
 
-        <ReplyBox ticket={ticket} onSaved={load} />
+        <ReplyBox ticket={ticket} access={access} onSaved={load} />
       </div>
 
       <aside>
-        {isTech ? <TechnicianPanel ticket={ticket} onSaved={load} /> : <RequesterPanel ticket={ticket} />}
-        {data.booking && (
-          <div className="card">
-            <h3>Event booking</h3>
-            <p style={{ margin: 0 }}><Link to={`/events/${data.booking.Id}`}>{data.booking.Title}</Link></p>
-            <p className="muted small" style={{ margin: "4px 0 0" }}>
-              {data.booking.RoomName} · {formatWallRange(data.booking.StartAt.slice(0, 16), data.booking.EndAt.slice(0, 16))} · {data.booking.StatusName}
-            </p>
-          </div>
-        )}
-        {(ticket.UsesInventory || data.items.length > 0) && <ItemsPanel ticket={ticket} items={data.items} onSaved={load} />}
-        {(data.checklist.length > 0 || (isTech && ticket.UsesChecklist)) && (
+        {isBooking && <EventPanel ticket={ticket} access={access} editing={editing} onEdit={() => setEditing(true)} onSaved={load} />}
+        {/* A room-only request is HR's, so its IT status means nothing to the requester */}
+        {isTech ? <TechnicianPanel ticket={ticket} onSaved={load} />
+          : !hrView && !(ticket.HasRoom && !ticket.HasEquipment) && <RequesterPanel ticket={ticket} />}
+        {access.equipment && (ticket.UsesInventory || data.items.length > 0) && <ItemsPanel ticket={ticket} items={data.items} onSaved={load} />}
+        {access.equipment && (data.checklist.length > 0 || (isTech && ticket.UsesChecklist)) && (
           <ChecklistPanel ticket={ticket} checklist={data.checklist} onSaved={load} />
         )}
-        {isTech && data.events.length > 0 && (
+        {data.events.length > 0 && (
           <div className="card">
             <h3>History</h3>
             <ul className="history">
@@ -89,6 +108,119 @@ export default function TicketPage() {
   );
 }
 
+// The event and its room: details, the room's status, Confirm and Decline for
+// HR, and Change and Cancel for anyone who can change it.
+function EventPanel({ ticket, access, editing, onEdit, onSaved }) {
+  const { me, lookups, notify } = useApp();
+  const pending = ticket.BookingStatusId === lookups.defaults.bookingPendingStatusId;
+  const confirmed = ticket.BookingStatusId === lookups.defaults.bookingConfirmedStatusId;
+  const roomActive = ticket.HasRoom && ticket.IsActiveBooking;
+  const open = !ticket.IsClosed;
+  const isRequester = ticket.RequesterId === me.Id || ticket.ForUserId === me.Id;
+
+  async function act(action, ask, message) {
+    let reason;
+    if (ask) {
+      reason = prompt(ask);
+      if (reason === null) return;
+    }
+    try {
+      const result = await api.bookingAction(ticket.Id, action, reason || undefined);
+      notify([message, ...(result.warnings || [])].join(" "));
+      onSaved();
+    } catch (err) {
+      notify(err.message, true);
+    }
+  }
+
+  const when = ticket.StartAt ? formatWallRange(ticket.StartAt, ticket.EndAt)
+    : [formatDay(ticket.StartDate), formatDay(ticket.EndDate)].filter(Boolean).join(" to ");
+  const facts = [
+    ["When", when],
+    ...(ticket.HasRoom
+      ? [
+          ["Attendee count", ticket.AttendeeCount],
+          ["Refreshments", ticket.Refreshments ? "Yes" : "No"],
+          ["FOIA", ticket.Foia ? "Yes" : "No"],
+          ["Lunch catered", ticket.LunchCatered ? "Yes" : "No"]
+        ]
+      : [])
+  ].filter(([, v]) => v !== null && v !== undefined && v !== "");
+
+  return (
+    <div className="card">
+      <h3>Event</h3>
+      <dl className="facts">
+        {facts.map(([k, v]) => <div key={k}><dt>{k}</dt><dd>{v}</dd></div>)}
+      </dl>
+      <h3 style={{ marginTop: 14 }}>Room</h3>
+      {!ticket.HasRoom && <p className="muted small" style={{ margin: 0 }}>No room on this request.</p>}
+      {ticket.HasRoom && (
+        <>
+          <p style={{ margin: "0 0 8px" }}>
+            {ticket.RoomName} <span className="pill" style={{ background: ticket.RoomStatusColor || undefined }}>{ticket.RoomStatusName}</span>
+          </p>
+          {ticket.HasOverlap && <p className="flag">Another active booking has {ticket.RoomName} at an overlapping time. Check before confirming.</p>}
+          {ticket.ConfirmedByName && <p className="muted small">Confirmed by {ticket.ConfirmedByName}, {formatDate(ticket.ConfirmedAt)}</p>}
+          {open && roomActive && access.canDecideRoom && (
+            <div className="row">
+              {pending && <button className="btn pri sm" onClick={() => act("confirm", null, "Room confirmed.")}>Confirm</button>}
+              {(pending || confirmed) && (
+                <button className="btn sm" onClick={() => act("decline", "Why is it declined? (optional, the requester sees this)", "Room declined.")}>Decline</button>
+              )}
+            </div>
+          )}
+          {open && roomActive && !access.canDecideRoom && pending && <p className="muted small">HR confirms or declines the room.</p>}
+        </>
+      )}
+      {open && !editing && (isRequester || me.IsTechnician || access.hrNotes) && (
+        <div className="row" style={{ marginTop: 14 }}>
+          <button className="btn sm" onClick={onEdit}>Change</button>
+          <button className="btn sm danger" onClick={() => act("cancel", "Cancel this request? Add a reason if you like.", "Request cancelled.")}>
+            Cancel request
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Changing the event, room, comments and (for the requester and IT) the
+// equipment, with the same form used to ask for it.
+function EditBooking({ ticket, access, items, onDone }) {
+  const { notify } = useApp();
+  async function save(fields) {
+    const { data, files } = withPastedImages(fields, "comments");
+    const result = await api.updateBooking(ticket.Id, data, files);
+    notify(["Changes saved.", ...(result.warnings || [])].join(" "));
+    onDone(true);
+  }
+  return (
+    <BookingForm
+      initial={{
+        title: ticket.Subject,
+        startAt: ticket.StartAt || (ticket.StartDate ? `${dayValue(ticket.StartDate)}T09:00` : ""),
+        endAt: ticket.EndAt || (ticket.EndDate ? `${dayValue(ticket.EndDate)}T17:00` : ""),
+        roomId: ticket.RoomId ? String(ticket.RoomId) : "",
+        roomName: ticket.RoomName,
+        attendeeCount: ticket.AttendeeCount === null || ticket.AttendeeCount === undefined ? "" : String(ticket.AttendeeCount),
+        refreshments: !!ticket.Refreshments,
+        foia: !!ticket.Foia,
+        lunchCatered: !!ticket.LunchCatered,
+        comments: plainToRich(ticket.Description || ""),
+        items: items.map((i) => ({ inventoryItemId: i.InventoryItemId, quantity: i.Quantity }))
+      }}
+      canChangeItems={access.equipment && !items.some((i) => i.OutAt)}
+      roomOptional={access.equipment}
+      excludeTicketId={ticket.Id}
+      commentsLabel="Comments"
+      submitLabel="Save changes"
+      onSubmit={save}
+      onCancel={() => onDone(false)}
+    />
+  );
+}
+
 function Files({ attachments }) {
   if (!attachments.length) return null;
   return (
@@ -103,7 +235,9 @@ function Files({ attachments }) {
   );
 }
 
-function ReplyBox({ ticket, onSaved }) {
+// Technicians write public replies or internal notes; HR write replies or HR
+// notes (which technicians see too); the requester writes replies.
+function ReplyBox({ ticket, access, onSaved }) {
   const { me, lookups, notify } = useApp();
   const [body, setBody] = useState("");
   const [isNote, setIsNote] = useState(false);
@@ -112,8 +246,10 @@ function ReplyBox({ ticket, onSaved }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [fileKey, setFileKey] = useState(0);
+  const tech = me.IsTechnician;
+  const hr = !tech && access.hrNotes;
 
-  if (ticket.IsClosed && !me.IsTechnician) {
+  if (ticket.IsClosed && !tech && !hr) {
     return <div className="card"><p className="muted" style={{ margin: 0 }}>This ticket is closed. If you still need help, please submit a new request.</p></div>;
   }
 
@@ -122,7 +258,8 @@ function ReplyBox({ ticket, onSaved }) {
     setSaving(true);
     setError("");
     try {
-      const result = await api.addConversation(ticket.Id, { body, isTechnicianNote: isNote, statusId: statusId || undefined }, files);
+      const { data, files: withImages } = withPastedImages({ body, isTechnicianNote: isNote, statusId: statusId || undefined }, "body", files);
+      const result = await api.addConversation(ticket.Id, data, withImages);
       setBody("");
       setFiles([]);
       setStatusId("");
@@ -136,18 +273,22 @@ function ReplyBox({ ticket, onSaved }) {
     }
   }
 
+  const noteName = tech ? "Internal note" : "HR note";
+  const placeholder = isNote
+    ? tech ? "Internal note, only technicians see this" : "HR note, HR and technicians see this"
+    : tech || hr ? "Write a reply to the requester" : "Write a reply";
+
   return (
     <form className={`card form ${isNote ? "note" : ""}`} onSubmit={send}>
-      {me.IsTechnician && (
+      {(tech || hr) && (
         <div className="composer-tabs">
-          <button type="button" className={`btn sm ${!isNote ? "on" : ""}`} onClick={() => setIsNote(false)}>Public reply</button>
-          <button type="button" className={`btn sm ${isNote ? "on" : ""}`} onClick={() => setIsNote(true)}>Internal note</button>
+          <button type="button" className={`btn sm ${!isNote ? "on" : ""}`} onClick={() => setIsNote(false)}>{tech ? "Public reply" : "Reply"}</button>
+          <button type="button" className={`btn sm ${isNote ? "on" : ""}`} onClick={() => setIsNote(true)}>{noteName}</button>
         </div>
       )}
-      <textarea rows={5} value={body} onChange={(e) => setBody(e.target.value)} aria-label={isNote ? "Internal note" : "Reply"}
-        placeholder={isNote ? "Internal note, only technicians see this" : me.IsTechnician ? "Write a reply to the requester" : "Write a reply"} />
+      <RichEditor value={body} onChange={setBody} images label={isNote ? noteName : "Reply"} placeholder={placeholder} onError={setError} />
       <input key={fileKey} type="file" multiple onChange={(e) => setFiles([...e.target.files])} aria-label="Attach files" />
-      {me.IsTechnician && (
+      {tech && (
         <label>
           Then set status to
           <select value={statusId} onChange={(e) => setStatusId(e.target.value)}>
@@ -158,7 +299,7 @@ function ReplyBox({ ticket, onSaved }) {
       )}
       {error && <p className="error">{error}</p>}
       <div>
-        <button className="btn pri" disabled={saving || (!body.trim() && !files.length)}>
+        <button className="btn pri" disabled={saving || (!hasContent(body) && !files.length)}>
           {saving ? "Sending…" : isNote ? "Add note" : "Send reply"}
         </button>
       </div>
@@ -266,7 +407,7 @@ function TechnicianPanel({ ticket, onSaved }) {
           value={ticket.ForUserId ? { Id: ticket.ForUserId, DisplayName: ticket.ForUserName } : null}
           onChange={(p) => save({ forUserId: p?.Id ?? null })} />
       </label>
-      {(ticket.UsesDates || ticket.StartDate || ticket.EndDate) && (
+      {!ticket.StartAt && (ticket.UsesDates || ticket.StartDate || ticket.EndDate) && (
         <div className="row">
           <label>
             Start date

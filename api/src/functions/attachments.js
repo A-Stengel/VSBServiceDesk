@@ -3,6 +3,7 @@ const { HttpError } = require("../shared/errors");
 const { getConnection, sql } = require("../shared/db");
 const { downloadFile } = require("../shared/storage");
 const { loadVisibleTicket, accessOf } = require("../shared/tickets");
+const { INLINE_TYPES } = require("../shared/attachments");
 
 // Downloads an attachment, or shows an image pasted into the text. Files on
 // technician notes are only for technicians; files on HR notes are for
@@ -24,13 +25,14 @@ endpoint("getAttachment", { methods: ["GET"], route: "attachments/{id:int}" }, a
   }
 
   const buffer = await downloadFile(attachment.BlobPath);
+  const showInline = attachment.IsInline && INLINE_TYPES.includes(attachment.ContentType);
   const asciiName = attachment.FileName.replace(/[^\x20-\x7e]/g, "_").replace(/"/g, "'");
   return {
     status: 200,
     body: buffer,
     headers: {
       "Content-Type": attachment.ContentType || "application/octet-stream",
-      "Content-Disposition": `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(attachment.FileName)}`,
+      "Content-Disposition": `${showInline ? "inline" : "attachment"}; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(attachment.FileName)}`,
       "X-Content-Type-Options": "nosniff",
       "Cache-Control": attachment.IsInline ? "private, max-age=3600" : "private, no-store"
     }

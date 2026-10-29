@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, formatDate } from "../api.js";
 import { useApp } from "../App.jsx";
 import { roleLabel } from "./People.jsx";
+import MultiSelect from "../components/MultiSelect.jsx";
 
 // One person: what they hold (with Mark returned, Remove seat and Assign),
 // their tickets, their history, and buttons that open the request form
@@ -83,10 +84,6 @@ export default function Person() {
     run(api.assignHolding(person.Id, body), `Assigned ${name} to ${first}.`).then(() => setAssign(""));
   }
 
-  const toggleManaged = (departmentId, on) => {
-    const next = on ? [...person.ManagedDepartmentIds, departmentId] : person.ManagedDepartmentIds.filter((d) => d !== departmentId);
-    save({ managedDepartmentIds: next }, "Managed departments saved.");
-  };
 
   return (
     <div className="split">
@@ -204,17 +201,14 @@ export default function Person() {
               </select>
             </label>
           )}
-          <fieldset>
-            <legend>Manager of</legend>
-            {lookups.departments.map((d) => (
-              <label key={d.Id} className="check">
-                <input type="checkbox" checked={person.ManagedDepartmentIds.includes(d.Id)} disabled={!roles.admin}
-                  onChange={(e) => toggleManaged(d.Id, e.target.checked)} />
-                {d.Name}
-              </label>
-            ))}
-            {!roles.admin && <span className="muted small">Admins change this.</span>}
-          </fieldset>
+          <div className="field">
+            <span>Manager of</span>
+            <MultiSelect label="Manager of" disabled={!roles.admin}
+              options={lookups.departments.map((d) => ({ value: d.Id, label: d.Name }))}
+              value={person.ManagedDepartmentIds}
+              onChange={(ids) => save({ managedDepartmentIds: ids }, "Managed departments saved.")} />
+            {!roles.admin && <span className="muted small" style={{ fontWeight: 400 }}>Admins change this.</span>}
+          </div>
           <div>
             <strong className="small">Account status</strong>
             <div className="small">

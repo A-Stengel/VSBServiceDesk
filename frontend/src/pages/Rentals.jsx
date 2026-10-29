@@ -6,8 +6,9 @@ import { ListTabs, ListToolbar, SortTh, useListView } from "../components/ListVi
 
 const day = (value) => (value ? formatDay(`${value.slice(0, 10)}T00:00:00Z`) : "");
 
-// Rentals & Events: one row per request, with its room part (HR) and its
-// equipment part (IT). The list is view only; open a record to act on it.
+// Rentals & Events: one row per Equipment Rental / Event Booking ticket, with
+// its room part (HR) and its equipment part (IT). The list is view only; open
+// the ticket to act on it.
 // Event Managers see the room part only and the page is called Event
 // bookings. Staff see their own requests.
 export default function Rentals() {
@@ -107,7 +108,8 @@ export default function Rentals() {
               {rows.map((r) => (
                 <tr key={r.Key}>
                   <td>
-                    <Link className="link" to={r.Kind === "booking" ? `/events/${r.Id}` : `/tickets/${r.Id}`}>{r.Title}</Link>
+                    <Link className="link" to={`/tickets/${r.Id}`}>{r.Title}</Link>
+                    <div className="muted small">#{r.TicketNumber}{r.IsClosed ? " · closed" : ""}</div>
                     {r.HasOverlap && <div className="warn small">Another booking has this room at the same time</div>}
                   </td>
                   <td className="small">{r.AllDay ? `${day(r.StartAt)}${r.EndAt && r.EndAt !== r.StartAt ? ` to ${day(r.EndAt)}` : ""}` : formatWallRange(r.StartAt, r.EndAt)}</td>

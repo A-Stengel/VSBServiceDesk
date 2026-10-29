@@ -4,6 +4,8 @@ import { api, money, perPeriod } from "../api.js";
 import { useApp } from "../App.jsx";
 import PersonPicker from "../components/PersonPicker.jsx";
 import ItemsPicker from "../components/ItemsPicker.jsx";
+import RichEditor from "../components/RichEditor.jsx";
+import { hasContent, plainToRich, withPastedImages } from "../richtext.js";
 
 // One form that changes with the ticket type: pick the type first, then the
 // fields set up for that type (Settings, Form fields) appear, plus the fields
@@ -17,7 +19,8 @@ import ItemsPicker from "../components/ItemsPicker.jsx";
 const TYPE_DESCRIPTIONS = {
   "Support": "Something is broken or you have a question",
   "Access & Equipment": "Onboarding, changes, off boarding",
-  "Equipment Rental": "Borrow equipment, book a room, or both"
+  "Equipment Rental": "Borrow equipment, book a room, or both",
+  "Equipment Rental / Event Booking": "Borrow equipment, book a room, or both"
 };
 
 function startingPoint(lookups, params, state) {
@@ -31,7 +34,7 @@ function startingPoint(lookups, params, state) {
     typeId: type ? String(type.Id) : "",
     form: {
       subject: prefill.subject || "",
-      description: prefill.description || "",
+      description: plainToRich(prefill.description || ""),
       priorityId: lookups.defaults.defaultPriorityId || "",
       cc: "",
       categoryId: category ? String(category.Id) : "",
@@ -115,9 +118,13 @@ export default function SubmitRequest() {
   async function submit(e) {
     e.preventDefault();
     setError("");
+    if (!hasContent(form.description)) {
+      setError("Description is required.");
+      return;
+    }
     setSaving(true);
     try {
-      const data = {
+      const fields = {
         ...form,
         ticketTypeId: Number(typeId),
         items,
@@ -126,7 +133,8 @@ export default function SubmitRequest() {
         removals: showRemovals ? removals : undefined,
         requesterId: requester?.Id
       };
-      const result = await api.createTicket(data, files);
+      const { data, files: withImages } = withPastedImages(fields, "description", files);
+      const result = await api.createTicket(data, withImages);
       notify([`Ticket ${result.ticket.Number} created.`, ...(result.warnings || [])].join(" "));
       navigate(`/tickets/${result.ticket.Id}`);
     } catch (err) {
@@ -321,10 +329,11 @@ export default function SubmitRequest() {
             </fieldset>
           )}
 
-          <label>
-            Description
-            <textarea rows={6} value={form.description} onChange={set("description")} required />
-          </label>
+          <div className="field">
+            <span>Description</span>
+            <RichEditor value={form.description} onChange={(description) => setForm((f) => ({ ...f, description }))} images
+              label="Description" minHeight={150} onError={setError} />
+          </div>
 
           <div className="row">
             <label>

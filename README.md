@@ -7,7 +7,8 @@ final design in [docs/design.md](docs/design.md). It covers build steps 1 to
 ## What works in this MVP
 
 - Staff sign in with their `@vsb.org` Microsoft account. Anyone else is
-  refused. A person's account is created the first time they sign in.
+  refused. The staff email domains are a setting (Settings, Organization).
+  A person's account is created the first time they sign in.
 - Submit a request: pick the ticket type first (Support, Access & Equipment
   or Equipment Rental), and the form shows the fields set up for that type.
   Access & Equipment then asks for its category (Onboarding, Access &
@@ -17,17 +18,22 @@ final design in [docs/design.md](docs/design.md). It covers build steps 1 to
   the five latest things that happened. Technicians, admins and Event
   Managers get Go to and Manage requests sections at the top.
 - One Equipment Rental / Event Booking form: equipment, a room, or both (the
-  room is optional). HR confirms or declines the room on the record's own
-  page, which has its own history. Equipment goes to IT as a linked
-  Equipment Rental ticket. Event Managers never see equipment. The requester
-  can change or cancel, and moving the dates moves the equipment dates.
+  room is optional). Each request is one ticket. HR (Event Managers)
+  confirms or declines the room on the ticket, and sees only the room part:
+  no equipment, no technician notes, no status or technician. IT handles the
+  equipment. A request with only a room stays out of IT's lists and closes
+  itself after the event. The requester can change or cancel, and moving
+  the event moves the equipment dates.
 - The Tickets, Rentals & Events and People lists all have tabs, search,
   filters, sortable columns and saved views. Admins can share a ticket view
   with the team, where it shows as a "Team:" tab.
 - The ticket page: the conversation, replies, technician notes (hidden from
-  the requester), attachments, the side panel for status, technician,
-  priority, type, category and the rest, Move to Closure, and the history of
-  every change.
+  the requester), HR notes on bookings (HR and technicians), attachments,
+  the side panel for status, technician, priority, type, category and the
+  rest, Move to Closure, and the history of every change.
+- Rich text in descriptions, replies, notes and the booking guidelines:
+  bold, italic, underline, lists and links, and pictures pasted or dragged
+  into the text.
 - Status rules: a technician reply sets Awaiting User Response, a requester
   reply switches it back (the target status is a setting), and closing stamps
   the close date.
@@ -39,8 +45,8 @@ final design in [docs/design.md](docs/design.md). It covers build steps 1 to
   checklist lines on the ticket page.
 - The Inventory page, with Equipment and Licenses: on-hand counts with − and
   +, costs, the monthly license spend, adding an item with its quantity and
-  cost, deleting an item once nothing is out, and a change history. Any
-  technician can edit it.
+  cost, a low-stock "Warn at" number per item (or none), deleting an item
+  once nothing is out, and a change history. Any technician can edit it.
 - The People page and a page per person: what they hold (with Mark
   returned, Remove seat and Assign), their tickets, their change history,
   and buttons that open the request form filled in for a change, off
@@ -49,9 +55,10 @@ final design in [docs/design.md](docs/design.md). It covers build steps 1 to
   any technician can set a department.
 - The Settings page (the gear in the header), grouped by area, where admins
   edit every list, the form fields for each ticket type, email templates,
-  notification addresses, the low-stock warning, shared views and the
-  general settings. Every section keeps its own change history. Event
-  Managers see only Rooms, Booking guidelines and Room statuses.
+  notification addresses, shared views, the organization's name, time zone,
+  staff email domains and mailbox, and the general settings. Every section
+  keeps its own change history. Event Managers see only Rooms, Booking
+  guidelines and Room statuses.
 - New ticket numbers start at 0010000.
 
 ## Not in this MVP yet
@@ -64,6 +71,8 @@ These are the next build steps from the design:
   automatic close and the survey come next, behind the Outgoing email switch
   (Off by default).
 - The survey page.
+- Maintenance mode (staff locked out, mail only to the testing mailbox) and
+  the email on/off switches.
 - Event booking emails and the VSB Events calendar. Nothing is emailed to HR
   yet and nothing is written to the calendar. Both come with the email step.
 - The one-time import from the SharePoint lists.
@@ -137,6 +146,9 @@ makes a change if it hasn't been made yet, so running one twice is safe.
       belong to a ticket type, adds the Event Manager role, and creates the
       event booking tables (`BookingStatuses`, `Rooms`, `EventBookings` and
       `BookingEvents`). See "Ticket types and event booking" below.
+   8. `09_visual_overhaul.sql`, `10_delete_retired_ticket_types.sql`,
+      `11_one_ticket_bookings.sql` and `12_light_and_dark_mode.sql`.
+      Scripts 09, 10 and 11 have their own sections below.
 4. Leave `06_grant_function_app.sql` for Step 3.
 
 If `03_users.sql` prints a WARNING about duplicate emails, remove the
@@ -175,7 +187,8 @@ table shape, twice in a row, with no errors.
    - `SQL_DATABASE` = `db-VSB-ServiceDesk`
    - `STORAGE_ACCOUNT` = `stvsbservicedesk`
    - `ATTACHMENTS_CONTAINER` = `attachments`
-   - `ALLOWED_EMAIL_DOMAINS` = `vsb.org`
+   - `ALLOWED_EMAIL_DOMAINS` = `vsb.org` (only used until script 11 adds
+     the staff email domains setting)
 4. Let it use the database without a password:
    1. Open `database/06_grant_function_app.sql` and replace
       `func-vsb-servicedesk` with your Function App's name if it differs.
@@ -191,8 +204,7 @@ table shape, twice in a row, with no errors.
 
    ```bash
    cd api
-   npm install
-   func azure functionapp publish func-vsb-servicedesk --javascript
+   func azure functionapp publish func-vsb-servicedesk --javascript --build remote
    ```
 
    Or use "Deploy to Function App" from the Azure Functions extension in
@@ -355,12 +367,16 @@ rows.
   checklists, log tickets for other people (including adding someone who
   isn't listed), and use the People and Inventory pages.
 - Admins also use Settings, set people's roles and share saved views.
-- Everyone can book an event and change or cancel their own bookings.
-- Event Managers (HR) see every booking on the Event bookings page, confirm,
-  decline and change bookings, and manage the rooms and the booking
-  guidelines. They don't see any equipment, and they can't see tickets
-  other than their own. Technicians and Admins can do everything Event
-  Managers can.
+- Everyone can book a room or rent equipment, and change or cancel their own
+  requests.
+- Event Managers (HR) see every request with a room on the Event bookings
+  page and on its ticket: the event, the room, replies, HR notes and the
+  room's history. They confirm, decline and change bookings, reply to the
+  requester, add HR notes, and manage the rooms and the booking guidelines.
+  They don't see any equipment, technician notes, or tickets without a room
+  other than their own.
+- Only HR and Admins confirm or decline rooms. Technicians see every request
+  with equipment, but not requests that only book a room.
 
 Roles come from the Roles list. A role with Technician ticked gives
 technician access, Admin ticked gives both, and Event Manager ticked gives
@@ -382,3 +398,36 @@ and Offboarding. They only hold test data. In plain terms it:
 It runs as one transaction, so nothing changes if any part fails. Set
 `@PreviewOnly = 1` at the top to see the counts first. No API publish is
 needed.
+
+### One ticket for rentals and event bookings (script 11)
+
+Run `11_one_ticket_bookings.sql` once, then publish the API. It is safe to
+run twice. In plain terms it:
+
+- Makes each event booking part of a ticket. A booking that already has an
+  Equipment Rental ticket joins that ticket; a booking without one gets a
+  new ticket. Bookings that are over, declined or cancelled get a closed
+  ticket. The room details move to a new `TicketRooms` table, and the
+  booking's history is copied onto the ticket.
+- Drops the `EventBookings` and `BookingEvents` tables afterwards.
+- Renames the Equipment Rental type to Equipment Rental / Event Booking.
+- Turns the text already saved in descriptions, replies, notes and the
+  booking guidelines into rich text, keeping line breaks.
+- Gives each equipment item its own low-stock "Warn at" number, starting
+  from the old single setting, and removes that setting.
+- Adds the organization settings: app name, organization name, time zone,
+  staff email domains and an empty testing mailbox.
+- Widens `Settings.Value` so long guidelines fit.
+
+Everything after the new columns and tables runs as one transaction, so
+nothing changes if any part fails.
+It ends with "Step 11 complete: rentals and event bookings are one ticket."
+
+Then publish the API:
+
+```bash
+git checkout main; git pull; cd api
+func azure functionapp publish func-vsb-servicedesk --javascript --build remote
+```
+
+The website updates on its own when the change is merged.

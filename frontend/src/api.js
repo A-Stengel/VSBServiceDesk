@@ -79,10 +79,8 @@ export const api = {
   assignHolding: (id, data) => request("POST", `users/${id}/holdings`, data),
   returnHolding: (id, data) => request("POST", `users/${id}/holdings/return`, data),
 
-  bookings: (filters = {}) => request("GET", "bookings" + query(filters)),
-  booking: (id) => request("GET", `bookings/${id}`),
-  createBooking: (data) => request("POST", "bookings", data),
-  updateBooking: (id, data) => request("PATCH", `bookings/${id}`, data),
+  createBooking: (data, files) => request("POST", "bookings", withFiles(data, files)),
+  updateBooking: (id, data, files) => request("PATCH", `bookings/${id}`, withFiles(data, files)),
   bookingAction: (id, action, reason) => request("POST", `bookings/${id}/${action}`, { reason }),
   rooms: () => request("GET", "bookings/rooms"),
   createRoom: (data) => request("POST", "bookings/rooms", data),
@@ -134,7 +132,7 @@ export function formatDay(value) {
   return new Date(value).toLocaleDateString(undefined, { timeZone: "UTC", dateStyle: "medium" });
 }
 
-// Booking times are VSB local time sent as "2026-11-10T09:00"; show them as
+// Booking times are the desk's local time sent as "2026-11-10T09:00"; show them as
 // typed, with no time zone shift.
 export function formatWall(value) {
   if (!value) return "";
