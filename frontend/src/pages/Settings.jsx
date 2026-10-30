@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { api, formatDate } from "../api.js";
+import { api, formatDate, timeAgo } from "../api.js";
 import { useApp } from "../App.jsx";
 import Logo, { logoChanged } from "../components/Logo.jsx";
 import RichEditor from "../components/RichEditor.jsx";
+import { HeldMailList } from "./HeldMail.jsx";
 import { plainToRich } from "../richtext.js";
 import { organization } from "../organization.js";
 import {
@@ -34,13 +35,17 @@ const SECTIONS = [
   { key: "departments", label: "Departments", table: "departments" },
   { key: "holidays", label: "Holidays", table: "holidays" },
   { group: "Email" },
-  { key: "emailTimers", label: "Email and timers", history: "general" },
+  { key: "incoming", label: "Incoming", history: "incoming" },
+  { key: "outgoing", label: "Outgoing", history: "outgoing" },
+  { key: "automations", label: "Automations", history: "automations" },
+  { key: "heldMail", label: "Held mail" },
   { key: "notifications", label: "Notifications", history: "notifications" },
   { key: "templates", label: "Email templates", history: "templates" },
   { group: "Inventory and team" },
   { key: "onboarding", label: "Onboarding defaults", history: "inventoryItems,software" },
   { key: "sharedViews", label: "Shared views" },
   { group: "System" },
+  { key: "access", label: "Access and maintenance", history: "access" },
   { key: "appearance", label: "Appearance", history: "appearance" },
   { key: "logo", label: "Logo", history: "logo" },
   { key: "roles", label: "Roles", table: "roles" },
@@ -65,6 +70,11 @@ const DESCRIPTIONS = {
   userTypes: "Staff sign in; outside people and shared mailboxes only email in.",
   billingPeriods: "How often a license is billed, for the monthly cost on the Inventory page.",
   organization: "Who this service desk is for. Change these to set the app up for another organization.",
+  incoming: "What the app does with mail sent to the service desk mailbox. The mailbox is only read: nothing is moved, deleted or marked as read.",
+  outgoing: "Each email the desk sends has its own switch. Replies are always saved on the ticket; when their switch is off they show \"Not emailed\".",
+  automations: "Jobs the app runs on its own. The warning email is under Outgoing; here is whether tickets close themselves.",
+  heldMail: "Email from people the desk doesn't know yet (while \"Create accounts for new senders\" is off), and email that couldn't be handled.",
+  access: "Who can use the web app. Email keeps working either way.",
   appearance: "The colors for light mode and dark mode. Everyone picks Light, Dark or Match device from the menu under their name.",
   logo: "Shown in the header, on the loading screen and in the browser tab. A square PNG with a transparent background looks best."
 };
@@ -128,12 +138,22 @@ function Section({ section, onChange }) {
       return <FormFields onChange={onChange} />;
     case "guidelines":
       return <Guidelines onChange={onChange} />;
-    case "emailTimers":
-      return <SettingsForm keys={["EmailSwitch", "RequesterReplyStatusId", "WarningBusinessDays", "CloseBusinessDays"]} onChange={onChange}
-        note="Outgoing email stays Off until you're ready. Sending email and the business day timers come in the email step of the build; these settings are ready for it." />;
+    case "incoming":
+    case "outgoing":
+    case "automations":
+      return (
+        <>
+          <EmailStatus />
+          <SettingsForm section={section.key} onChange={onChange} notes={EMAIL_NOTES} />
+        </>
+      );
+    case "heldMail":
+      return <HeldMailList onChange={onChange} />;
+    case "access":
+      return <SettingsForm section="access" onChange={onChange} notes={EMAIL_NOTES} />;
     case "notifications":
-      return <SettingsForm keys={["ITTeamEmails", "HREmails"]} onChange={onChange}
-        note="IT gets an email for every new ticket; HR for every room request. Nothing is sent until email is built and switched on." />;
+      return <SettingsForm section="notifications" onChange={onChange} notes={EMAIL_NOTES}
+        note="IT gets the new ticket alert; HR the room requests. Each only goes out when its switch is on in Outgoing. Error alerts go out whatever the switches say: one when a job starts failing and one when it works again." />;
     case "templates":
       return <Templates onChange={onChange} />;
     case "onboarding":
@@ -657,16 +677,59 @@ function useSettings() {
   return { data, setData, error };
 }
 
-const ORGANIZATION_KEYS = ["AppName", "OrganizationName", "TimeZone", "StaffEmailDomains", "MailboxAddress", "TestingMailboxAddress"];
+const ORGANIZATION_KEYS = ["AppName", "OrganizationName", "TimeZone", "StaffEmailDomains", "MailboxAddress", "TestingMailboxAddress", "SiteUrl"];
 const ORGANIZATION_NOTES = {
   AppName: "Shown in the header, on the sign-in page and in the browser tab.",
   OrganizationName: "Used in messages, like \"Only [organization] staff accounts can use this site\".",
   TimeZone: "Event times, and when room-only bookings close after the event.",
   StaffEmailDomains: "Who can sign in, and who counts as staff when a ticket is logged for someone. Your own domain must stay in the list.",
   MailboxAddress: "The shared mailbox tickets are emailed to and every email is sent from.",
-  TestingMailboxAddress: "Used while the app is in maintenance mode: mail is read from and sent to this address only. Maintenance mode comes with the email settings."
+  TestingMailboxAddress: "Used while the app is in maintenance mode (Settings > Access and maintenance): mail is read from and sent to this address only.",
+  SiteUrl: "The link in emails, like https://servicedesk.example.org."
 };
-const SECTION_KEYS = ["EmailSwitch", "RequesterReplyStatusId", "WarningBusinessDays", "CloseBusinessDays", "ITTeamEmails", "HREmails", "EventGuidelines", ...ORGANIZATION_KEYS];
+
+const EMAIL_NOTES = {
+  InCreateTickets: "A new email (not a reply) becomes a ticket.",
+  InAddReplies: "An email with a ticket number in the subject, or a reply to one of the desk's emails, is added to that ticket. A reply always reopens a closed ticket.",
+  InCreateSenders: "When off, mail from people the desk doesn't know waits in Held mail.",
+  InSaveAttachments: "Files and pictures in emails are saved on the ticket.",
+  InProcessAfter: "Mail received before this is never read. It is set to the moment you first turn incoming mail on.",
+  MaxEmailMB: "Larger attachments aren't saved, and replies can't attach more than fits in one email of this size.",
+  OutRequesterReplyAlert: "Goes to the assigned technician, or the IT team when nobody is assigned.",
+  OutWarning: "On the warning business day, at 8:15 in the morning.",
+  OutClosed: "With the survey switched on too, the survey comes in the same email.",
+  OutBookingChange: "To HR when a booking with a room changes, and to the technician (or the IT team) when it has equipment.",
+  AutoClose: "Tickets waiting on the requester close on the close business day, at 8:15 in the morning. They get the closed email and survey when those are on.",
+  CalendarWrite: "Room bookings are added (marked Pending), updated and removed on the events calendar. Nobody gets an invitation.",
+  StaffWebAccess: "When off, staff see a coming soon page and are told to email the desk. Technicians, admins and event managers keep working.",
+  MaintenanceMode: "Staff and HR see a down for maintenance page; technicians and admins keep working. All mail is read from and sent to the testing mailbox, with the real recipients written at the top.",
+  ErrorAlertEmails: "Who hears when reading mail, sending, the timers or the calendar stop working."
+};
+
+// The last mailbox check, the jobs that are failing, and mail sent today.
+function EmailStatus() {
+  const [status, setStatus] = useState(null);
+  useEffect(() => {
+    api.emailStatus().then(setStatus).catch(() => setStatus(null));
+  }, []);
+  if (!status) return null;
+  const job = (name) => status.jobs.find((j) => j.Name === name);
+  const mailbox = job("mailbox");
+  const failing = status.jobs.filter((j) => j.IsFailing);
+  return (
+    <div className={failing.length ? "flag" : "muted small"} style={{ marginBottom: 14 }}>
+      {status.maintenance && <div><strong>Maintenance mode is on:</strong> mail is read from and sent to {status.mailbox}.</div>}
+      <div>
+        Last mailbox check: {mailbox?.LastRunAt ? timeAgo(mailbox.LastRunAt) : "never"} · {status.ReadToday} read and {status.SentToday} sent in the last day
+        {status.FailedToday > 0 && ` · ${status.FailedToday} failed to send`}
+        {status.Held > 0 && ` · ${status.Held} in Held mail`}
+      </div>
+      {failing.map((j) => <div key={j.Name}>{j.Label} is failing ({timeAgo(j.LastErrorAt)}): {j.LastError}</div>)}
+    </div>
+  );
+}
+// Settings with a page of their own; Other settings shows the rest.
+const SECTION_KEYS = ["EventGuidelines", ...ORGANIZATION_KEYS];
 
 // keys: the settings to show. exclude: everything not shown in another
 // section (Other settings).
@@ -678,7 +741,16 @@ const timeZones = () => {
   }
 };
 
-function SettingsForm({ keys, exclude, note, notes = {}, onChange }) {
+// The browser's local time for a stored ISO time, for a datetime-local box.
+const localInput = (iso) => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+};
+
+// "keys" lists the settings to show, or "section" shows every setting the
+// server puts in that section; "exclude" shows what no page covers.
+function SettingsForm({ keys, section, exclude, note, notes = {}, onChange }) {
   const { lookups, reloadLookups, notify } = useApp();
   const { data, setData, error } = useSettings();
   const [values, setValues] = useState(null);
@@ -689,8 +761,10 @@ function SettingsForm({ keys, exclude, note, notes = {}, onChange }) {
   if (error) return <p className="error">{error}</p>;
   if (!data || !values) return <p className="muted">Loading…</p>;
   const metas = exclude
-    ? data.meta.filter((m) => !SECTION_KEYS.includes(m.key) && !m.template)
-    : keys.map((key) => data.meta.find((m) => m.key === key)).filter(Boolean);
+    ? data.meta.filter((m) => !SECTION_KEYS.includes(m.key) && !m.template && !m.section)
+    : section
+      ? data.meta.filter((m) => m.section === section)
+      : keys.map((key) => data.meta.find((m) => m.key === key)).filter(Boolean);
 
   async function save(e) {
     e.preventDefault();
@@ -708,7 +782,15 @@ function SettingsForm({ keys, exclude, note, notes = {}, onChange }) {
 
   return (
     <form className="form" style={{ maxWidth: 560 }} onSubmit={save}>
-      {metas.map((m) => (
+      {metas.map((m) => m.type === "switch" ? (
+        <label key={m.key} className="check">
+          <input type="checkbox" checked={values[m.key] === "On"} onChange={(e) => setValues({ ...values, [m.key]: e.target.checked ? "On" : "Off" })} />
+          <span>
+            {m.label}: <strong>{values[m.key] === "On" ? "On" : "Off"}</strong>
+            {notes[m.key] && <span className="muted small" style={{ display: "block", fontWeight: 400 }}>{notes[m.key]}</span>}
+          </span>
+        </label>
+      ) : (
         <label key={m.key}>
           {m.key === "RequesterReplyStatusId" ? "Status set when the requester replies" : m.label}
           {m.type === "lookup" && (
@@ -726,6 +808,10 @@ function SettingsForm({ keys, exclude, note, notes = {}, onChange }) {
             <input type="number" min="0" value={values[m.key] ?? ""} onChange={(e) => setValues({ ...values, [m.key]: e.target.value })} />
           )}
           {m.type === "text" && <input value={values[m.key] ?? ""} onChange={(e) => setValues({ ...values, [m.key]: e.target.value })} />}
+          {m.type === "datetime" && (
+            <input type="datetime-local" value={localInput(values[m.key])}
+              onChange={(e) => setValues({ ...values, [m.key]: e.target.value ? new Date(e.target.value).toISOString() : "" })} />
+          )}
           {m.type === "email" && (
             <input type="email" value={values[m.key] ?? ""} onChange={(e) => setValues({ ...values, [m.key]: e.target.value })} />
           )}
@@ -747,7 +833,7 @@ function SettingsForm({ keys, exclude, note, notes = {}, onChange }) {
   );
 }
 
-const PLACEHOLDERS = "[Requester], [TicketNumber], [Subject], [Link], [DaysLeft], [Room], [When]";
+const PLACEHOLDERS = "[Requester], [TicketNumber], [Subject], [Link], [DaysLeft], [Room], [When], [Description], [Changes]";
 
 function Templates({ onChange }) {
   const { notify } = useApp();
@@ -784,7 +870,7 @@ function Templates({ onChange }) {
       </label>
       <label>Subject<input value={draft.subject} maxLength={1000} onChange={(e) => setDraft({ ...draft, subject: e.target.value })} /></label>
       <label>Message<textarea rows={8} maxLength={4000} value={draft.body} onChange={(e) => setDraft({ ...draft, body: e.target.value })} /></label>
-      <p className="muted small" style={{ margin: 0 }}>Placeholders: {PLACEHOLDERS}. Nothing is emailed until email is built and switched on.</p>
+      <p className="muted small" style={{ margin: 0 }}>Placeholders: {PLACEHOLDERS}. Every subject gets "Ticket #" and the number if it doesn't have them, so replies find their ticket. An email only goes out while its switch is on in Outgoing.</p>
       <div><button className="btn pri">Save template</button></div>
     </form>
   );

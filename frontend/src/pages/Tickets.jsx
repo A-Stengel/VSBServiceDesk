@@ -14,6 +14,7 @@ export default function Tickets() {
   const { me, roles, lookups } = useApp();
   const [data, setData] = useState({});
   const [technicians, setTechnicians] = useState([]);
+  const [held, setHeld] = useState(0);
   const [error, setError] = useState("");
 
   const tabs = useMemo(() => {
@@ -76,7 +77,9 @@ export default function Tickets() {
   const fetchKey = `${tab.scope}:${tab.state}`;
 
   useEffect(() => {
-    if (roles.technician) api.users({ technicians: 1 }).then(setTechnicians).catch(() => {});
+    if (!roles.technician) return;
+    api.users({ technicians: 1 }).then(setTechnicians).catch(() => {});
+    api.heldMail().then((list) => setHeld(list.length)).catch(() => {});
   }, [roles.technician]);
 
   useEffect(() => {
@@ -94,6 +97,7 @@ export default function Tickets() {
         <h1>{title}</h1>
         <div className="row center">
           {rows && <span className="muted small">{rows.length} ticket{rows.length === 1 ? "" : "s"}</span>}
+          {held > 0 && <Link className="btn sm" to="/held-mail">{held} held email{held === 1 ? "" : "s"}</Link>}
           <Link className="btn pri sm" to="/new">Submit a request</Link>
         </div>
       </div>

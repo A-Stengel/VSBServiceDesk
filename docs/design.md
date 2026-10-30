@@ -1,6 +1,7 @@
 # VSB Service Desk Design
 
-Version 5, approved 2026-10-29. Version 4 was approved on 2026-10-05.
+Version 5, approved 2026-10-29, with the email sections brought up to date
+on 2026-10-30. Version 4 was approved on 2026-10-05.
 
 ## Summary
 
@@ -368,76 +369,106 @@ Priority, CC and Attachments.
 
 ## Email flow
 
-The app checks `servicedesk@vsb.org` every 2 minutes through Microsoft Graph. It
-never moves or deletes a message, and it sends every email from
-`servicedesk@vsb.org`.
+The app checks the desk's mailbox through Microsoft Graph on the "Minutes
+between mailbox checks" setting (2 today). It never moves, deletes or marks a
+message, and it sends every email from the same mailbox. Every part has its
+own switch in Settings > Email, and every switch starts Off.
 
 ### Incoming email
 
-1. Read new messages from the mailbox's Inbox, skipping any message already
-   recorded in `InboundEmails`. This lets the old Power App keep processing the
-   same mailbox.
-2. Skip automatic mail: out-of-office replies, delivery failures, and anything
-   sent by `servicedesk@vsb.org` itself, so the app never emails itself in a
-   loop.
-3. Decide whether it's a reply. It is if the subject carries a ticket number
-   like `[#0005689]`, or if its reply headers point at an email the app sent. A
-   reply is added to that ticket.
-4. Otherwise, create a ticket. Its Source is Email, its Subject and Description
-   come from the email, its attachments are saved, and the people on CC are
-   added to the ticket's CC list.
-5. Find or create the sender in Users. Unknown vsb.org senders become Staff,
-   shared mailboxes become Shared Mailbox, and everyone else becomes External.
+1. Read messages received since the last check (and after "Only read mail
+   received after") from the Inbox, skipping any already recorded in
+   `InboundEmails`. This lets the old Power App keep processing the same
+   mailbox during the trial.
+2. Skip automatic mail (out-of-office replies, delivery failures, anything
+   marked Auto-Submitted) and mail the app sent itself, so it never emails
+   itself in a loop.
+3. Decide whether it's a reply. It is if the subject carries `Ticket #0010023`
+   (this app) or `##0005854##` (the old desk, matched on imported numbers
+   too), or if its reply headers point at an email the app sent. A reply to
+   a merged ticket goes to the ticket it was merged into. A reply is added to
+   the ticket, stops the waiting clock and sets the "after the requester
+   replies" status. A reply always reopens a closed ticket, however old; if
+   reopening would over-book equipment, the reply is still added and a note
+   tells the technician.
+4. Otherwise, create a ticket: Source Email, the type from Settings, the
+   subject without "RE:", "FW:" or "EXT:", the message and its files, and
+   everyone else on the email as CCs.
+5. Find or create the sender in Users. Unknown staff-domain senders become
+   Staff (or Shared Mailbox, with the optional User.Read.All permission) and
+   everyone else External. With "Create accounts for new senders" off, their
+   mail waits in Held mail for a technician to accept or dismiss.
+
+Files over the "largest email" size are not saved; the ticket says which, and
+they stay in the mailbox. A message that fails is kept in Held mail with the
+error, to try again.
 
 ### Outgoing email
 
-- **Ticket created.** The requester and CC get "We received your request" with
-  the ticket number. The whole IT team gets a new ticket alert with a link.
-- **Technician replies.** The requester and CC get the reply text and any
-  attachments.
-- **Requester replies.** The assigned technician gets a reply alert with a link,
-  or the whole IT team if nobody is assigned.
-- **Business day 3 of waiting.** The requester gets a warning that the ticket
-  closes tomorrow unless they reply.
-- **Ticket closed.** The requester gets a closed notice with the 1 to 5 survey
-  links, whether a technician closed it or the day-4 rule did.
+Each has its own switch:
 
-Technician notes never leave the app. Every subject carries the ticket number,
-like `[#0005689]`, so replies thread back to the right ticket.
+- **Ticket received.** The requester and CCs, with the ticket number.
+- **New ticket alert.** The IT team addresses, with the description and a
+  link. Room-only requests go to HR instead (room request alert).
+- **Technician and HR replies.** The requester and CCs get the reply, its
+  attachments and pasted pictures, and the conversation below, newest first.
+  Notes and automatic emails are never included. A reply whose switch is off
+  is still saved and shows "Not emailed".
+- **Requester replies.** The assigned technician, or the IT team if nobody is
+  assigned.
+- **Waiting on you.** The requester, on the warning business day.
+- **Closed and survey.** The requester, with the 1 to 5 survey links. With
+  both switches on they come as one email. Never for room-only requests or a
+  ticket merged into another.
+- **Bookings.** Room confirmed or declined to the requester; changes and
+  cancellations to HR and to the technician holding the equipment.
+
+Every email uses the branded layout: the logo in a bar of the Appearance
+header color, the message, and a "View your ticket" button for staff. Outside
+people can't sign in, so they get no button and are asked to reply instead.
+Every subject carries `Ticket #0010023` so replies thread back. Automatic
+emails are logged in the technician-only history, never in the conversation.
+Technician notes never leave the app.
 
 ### Waiting on the requester
 
 1. When a technician replies, the status changes to Awaiting User Response
    unless the technician picks another status. Any status flagged
    `IsWaitingOnRequester` starts the clock and sets `WaitingSince`.
-2. A job runs every hour on weekdays. At 3 business days with no reply from the
-   requester, it sends the warning once.
-3. At 4 business days, it closes the ticket, which sends the closed email with
-   the survey.
+2. A job wakes every quarter hour and does the day's work once, at 8:15 in
+   the morning in the desk's time zone, on business days. At 3 business days
+   with no reply it sends the warning once.
+3. At 4 business days, with "Close tickets with no answer" on, it closes the
+   ticket, which sends the closed email and survey when those are on.
 4. If the requester replies at any point, the clock stops, the status switches
    to the one chosen in Settings, and the technician is emailed.
 
 Business days are Monday to Friday, skipping any date in the Holidays list.
 
-### The email switch for the parallel run
+### The email switches
 
-Settings has a three-way switch for outgoing mail:
-
-- **Off.** Nothing is sent.
-- **IT only.** Emails go only to IT team addresses, for testing.
-- **On.** Emails go to everyone.
-
-It starts at Off. Incoming email is read in every mode, so tickets keep arriving
-while you test.
+Settings > Email has three tabs, Incoming, Outgoing and Automations, with a
+switch for each function above, plus Held mail, Notifications (IT team, HR
+and error alert addresses) and the templates. Every switch starts Off, so
+you can turn on, for example, replies without ticket creation, or technician
+replies without the closed email. An Email status line shows the last
+mailbox check, anything failing and the mail sent in the last day. When a
+job starts failing, the error alert recipients get one email, and one more
+when it works again.
 
 ### Maintenance mode
 
-Built with the email settings. An admin turns it on in Settings. While it's on:
+An admin turns it on in Settings > System > Access and maintenance. While
+it's on:
 
-- Staff who sign in see a "down for maintenance" page. Technicians and admins
-  keep working as normal.
-- Mail is read only from the testing mailbox, and every outgoing email goes only
-  to the testing mailbox, so nothing reaches real requesters.
+- Staff and HR who sign in see a "down for maintenance" page. Technicians and
+  admins keep working as normal.
+- Mail is read only from the testing mailbox, and every outgoing email goes
+  only to the testing mailbox, with the real recipients written at the top,
+  so nothing reaches real requesters.
+
+A separate switch there, "Staff can use the web app", keeps staff out with a
+"coming soon" page before the desk opens to them (technician-first start).
 
 ## Inventory, licenses, onboarding and offboarding
 
@@ -553,8 +584,12 @@ of a signed-in person, not as the app itself. The plan is:
    Group.ReadWrite.All delegated permission, and every requester would have to
    be able to write to the group calendar.
 
-Calendar writes and booking emails follow the outgoing email switch. While it's
-at Off, nothing reaches the calendar or HR, so test bookings stay in the app.
+Calendar writes have their own switch ("Write room bookings to the events
+calendar", Automations), and booking emails have theirs under Outgoing. All
+start Off, so nothing reaches the calendar or HR until you turn them on. A
+booking is added marked "[Pending]" and tentative, updated when it changes or
+is confirmed, and removed when it is declined, cancelled or loses its room. A
+failed write is noted in the ticket's history and in the Email status.
 
 ## Rich text
 
@@ -617,11 +652,11 @@ side until you switch off the Power App.
    and can be skipped if it proves difficult, leaving the files in SharePoint.
 4. **Check.** The script prints counts per status and category so you can
    compare them with the Power App.
-5. **Parallel run.** Both systems read `servicedesk@vsb.org`. The new app's
-   email switch stays at Off or IT only, so people only get emails from the old
-   system.
-6. **Cutover.** Turn the email switch to On, then stop the Power App's email
-   flow.
+5. **Trial.** Technicians use the app in maintenance mode, where all mail is
+   read from and sent to the testing mailbox (`sdtest@vsb.org`), so the old
+   desk keeps handling `servicedesk@vsb.org` alone.
+6. **Cutover.** Turn off the Power App's email flow, then turn maintenance
+   mode off and the email switches on.
 
 Tickets created in the old system after the export won't be imported. New
 tickets start at 0010000, so they never clash with the old system's numbers.
@@ -636,10 +671,10 @@ exact commands for each step.
 3. Create the Function App (Flex Consumption, Node 20, East US) and turn on its
    system-assigned managed identity.
 4. Give that identity access: a contained SQL user with read and write roles,
-   Storage Blob Data Contributor on the storage account, and the Graph app roles
-   Mail.Read and Mail.Send.
-5. Limit the mail access to `servicedesk@vsb.org` with an Exchange RBAC for
-   Applications management scope, using Exchange Online PowerShell.
+   Storage Blob Data Contributor on the storage account, and mail access.
+5. Give the mail access with Exchange RBAC for Applications (Mail.Read,
+   Mail.Send and Calendars.ReadWrite), scoped to `servicedesk@vsb.org`,
+   `sdtest@vsb.org` and the events calendar, using Exchange Online PowerShell.
 6. Create an Entra app registration for sign-in, single tenant, with the Static
    Web App's callback URL.
 7. Create the Static Web App on the Standard plan, connect it to

@@ -62,13 +62,13 @@ async function current() {
   return { light: parseColors(settings.AppearanceLight), dark: parseColors(settings.AppearanceDark) };
 }
 
-endpoint("getAppearance", { methods: ["GET"], route: "appearance" }, async (request, context, user) => {
+endpoint("getAppearance", { methods: ["GET"], route: "appearance", open: true }, async (request, context, user) => {
   return { jsonBody: { ...(await current()), mode: await modeOf(user.Id) } };
 });
 
 endpoint(
   "saveMyAppearance",
-  { methods: ["PUT"], route: "me/appearance", failMessage: "Could not save your choice" },
+  { methods: ["PUT"], route: "me/appearance", failMessage: "Could not save your choice", open: true },
   async (request, context, user) => {
     const { mode } = await readJson(request);
     if (!MODES.includes(mode)) throw new HttpError(400, "Pick Light, Dark or Match device");

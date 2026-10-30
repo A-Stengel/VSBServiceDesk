@@ -18,6 +18,8 @@ const { sanitizeRich, toPlain } = require("../shared/richtext");
 const { toSqlTime, wallNow, wallLabel } = require("../shared/clock");
 const { loadTicket, loadVisibleTicket, accessOf, forViewer, setStatus, recordEvents } = require("../shared/tickets");
 const { logChange } = require("../shared/changelog");
+const { ticketCreated, ticketClosed, bookingDecided, bookingChanged } = require("../shared/notify");
+const { syncCalendar } = require("../shared/calendar");
 
 // Equipment Rental / Event Booking: one ticket for a room, equipment, or both.
 //
@@ -207,8 +209,8 @@ endpoint(
       throw error;
     }
 
-    // The HR email, the IT team email (when there's equipment) and the events
-    // calendar entry come with the email step, behind the email switches.
+    await ticketCreated(ticketId, context);
+    await syncCalendar(ticketId, context);
     return { status: 201, jsonBody: { ticket: forViewer(await loadTicket(pool, ticketId), user), warnings: [] } };
   }
 );
@@ -237,6 +239,7 @@ endpoint(
     const { data, files } = await readBodyWithFiles(request);
     const settings = await getSettings();
     const id = Number(request.params.id);
+    let changes = [];
 
     await withTransaction(async (tx) => {
       const ticket = await loadChangeable(tx, id, user, settings);
@@ -325,14 +328,20 @@ endpoint(
         }
       }
       await recordEvents(tx, id, user.Id, events);
+      changes = events;
 
-      if ("items" in data) await syncItems(tx, id, readItems(data.items), user.Id);
+      if ("items" in data) {
+        const before = itemsLabel(await equipmentLines(tx, id));
+        if (await syncItems(tx, id, readItems(data.items), user.Id)) {
+          changes.push({ field: "Equipment", oldValue: before, newValue: itemsLabel(await equipmentLines(tx, id)) });
+        }
+      }
       const after = await loadTicket(tx, id);
       if (!after.HasRoom && !after.HasEquipment) throw new HttpError(400, "A request needs a room, some equipment, or both");
     });
 
-    // The HR and technician emails and the calendar update come with the
-    // email step, behind the email switches.
+    await bookingChanged(id, changes, user, context);
+    await syncCalendar(id, context);
     const pool = await getConnection();
     return { jsonBody: { ticket: forViewer(await loadTicket(pool, id), user), warnings: [] } };
   }
@@ -354,6 +363,7 @@ for (const [name, action] of [["confirmBooking", "confirm"], ["declineBooking", 
       const statusKey = { confirm: "BookingConfirmedStatusId", decline: "BookingDeclinedStatusId", cancel: "BookingCancelledStatusId" }[action];
       const statusId = settings[statusKey];
       const warnings = [];
+      let closedNow = false;
 
       await withTransaction(async (tx) => {
         const ticket = await loadChangeable(tx, id, user, settings);
@@ -385,11 +395,15 @@ for (const [name, action] of [["confirmBooking", "confirm"], ["declineBooking", 
             warnings.push("Equipment is still out with the requester, so the ticket stays open until IT marks it returned.");
           } else {
             warnings.push(...(await setStatus(tx, await loadTicket(tx, id), settings.ClosedStatusId, user.Id)));
+            closedNow = true;
           }
         }
       });
 
-      // The requester's email and the calendar change come with the email step.
+      if (action !== "cancel") await bookingDecided(id, action, reason, context);
+      else await bookingChanged(id, [{ field: "Cancelled", newValue: reason || null }], user, context);
+      if (closedNow) await ticketClosed(id, context);
+      await syncCalendar(id, context);
       const pool = await getConnection();
       return { jsonBody: { ticket: forViewer(await loadTicket(pool, id), user), warnings } };
     }

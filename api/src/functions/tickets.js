@@ -19,6 +19,7 @@ const { hasContent } = require("../shared/richtext");
 const { getAvailability, assertStock, assertTicketStock, assertSeats, readItems, addTicketItem } = require("../shared/inventory");
 const { getHoldings } = require("../shared/holdings");
 const { logChange } = require("../shared/changelog");
+const { ticketCreated, ticketClosed } = require("../shared/notify");
 const {
   TICKET_SELECT,
   FOR_IT_SQL,
@@ -357,8 +358,7 @@ endpoint(
       throw error;
     }
 
-    // Outgoing email ("ticket received", IT team notice) comes with the email
-    // step of the build; see the README.
+    await ticketCreated(ticketId, context);
     const ticket = await loadTicket(pool, ticketId);
     return { status: 201, jsonBody: { ticket: forViewer(ticket, user), warnings } };
   }
@@ -379,11 +379,13 @@ endpoint("getTicket", { methods: ["GET"], route: "tickets/{id:int}" }, async (re
 
   const conversations = await pool.request().input("Id", sql.Int, id).query(`
     SELECT c.Id, c.AuthorId, ${personName("u")} AS AuthorName, u.Email AS AuthorEmail,
-           c.Body, c.IsTechnicianNote, c.VisibleToEventManagers, c.Direction, c.CreatedAt
+           c.Body, c.IsTechnicianNote, c.VisibleToEventManagers, c.Direction, c.CreatedAt,
+           ${tech || access.hr ? "c.EmailedAt, c.EmailNote, CASE WHEN c.EmailMessageId IS NOT NULL THEN 1 ELSE 0 END AS CameByEmail," : ""}
+           c.MergedFromTicketId
     FROM dbo.TicketConversations c
     JOIN dbo.Users u ON u.Id = c.AuthorId
     WHERE c.TicketId = @Id ${notes}
-    ORDER BY c.CreatedAt, c.Id
+    ORDER BY c.CreatedAt DESC, c.Id DESC
   `);
   const attachments = await pool.request().input("Id", sql.Int, id).query(`
     SELECT a.Id, a.ConversationId, a.FileName, a.ContentType, a.SizeBytes, a.CreatedAt
@@ -441,9 +443,15 @@ endpoint("getTicket", { methods: ["GET"], route: "tickets/{id:int}" }, async (re
     hasOverlap = overlap.recordset.length > 0;
   }
 
+  // The satisfaction survey's answer, for technicians
+  const survey = tech
+    ? (await pool.request().input("Id", sql.Int, id).query("SELECT Rating, Comment, SentAt, AnsweredAt FROM dbo.Surveys WHERE TicketId = @Id")).recordset[0] || null
+    : null;
+
   return {
     jsonBody: {
-      ticket: { ...forViewer(ticket, user), HasOverlap: hasOverlap },
+      ticket: { ...forViewer(ticket, user), HasOverlap: hasOverlap, MergedIntoNumber: ticket.MergedIntoId ? formatNumber(ticket.MergedIntoId) : null },
+      survey,
       access: {
         equipment: access.equipment,
         technicianNotes: access.technicianNotes,
@@ -502,6 +510,7 @@ endpoint(
     const id = Number(request.params.id);
 
     const warnings = [];
+    let closedNow = false;
     await withTransaction(async (tx) => {
       const ticket = await loadTicket(tx, id);
       if (!ticket) throw new HttpError(404, "Ticket not found");
@@ -555,10 +564,14 @@ endpoint(
       // New dates, or reopening, can need equipment that's already taken.
       const reopened = changes.StatusId && ticket.IsClosed && !(await getStatus(tx, changes.StatusId.value)).IsClosed;
       if (changes.StartDate || changes.EndDate || reopened) await assertTicketStock(tx, id);
-      if (changes.StatusId) await accountOnClose(tx, ticket, await getStatus(tx, changes.StatusId.value), user.Id, warnings);
+      if (changes.StatusId) {
+        const status = await getStatus(tx, changes.StatusId.value);
+        closedNow = status.IsClosed && !ticket.IsClosed;
+        await accountOnClose(tx, ticket, status, user.Id, warnings);
+      }
     });
 
-    // The survey email on close comes with the email step of the build.
+    if (closedNow) await ticketClosed(id, context);
     const pool = await getConnection();
     return { jsonBody: { ticket: forViewer(await loadTicket(pool, id), user), warnings } };
   }

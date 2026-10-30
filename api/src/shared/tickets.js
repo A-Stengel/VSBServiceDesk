@@ -22,7 +22,7 @@ const TICKET_SELECT = `
          t.TechnicianId, CASE WHEN te.Id IS NOT NULL THEN ${personName("te")} END AS TechnicianName,
          t.DepartmentId, d.Name AS DepartmentName,
          t.Subject, t.Description, t.StartDate, t.EndDate, t.StartAt, t.EndAt,
-         t.CreatedAt, t.UpdatedAt, t.WaitingSince, t.ClosedAt, t.LegacyId,
+         t.CreatedAt, t.UpdatedAt, t.WaitingSince, t.ClosedAt, t.LegacyId, t.MergedIntoId,
          CAST(CASE WHEN tr.TicketId IS NOT NULL THEN 1 ELSE 0 END AS BIT) AS HasRoom,
          CAST(CASE WHEN EXISTS (SELECT 1 FROM dbo.TicketItems ti WHERE ti.TicketId = t.Id) THEN 1 ELSE 0 END AS BIT) AS HasEquipment,
          tr.RoomId, rm.Name AS RoomName, tr.AttendeeCount, tr.Refreshments, tr.Foia, tr.LunchCatered,
@@ -55,7 +55,7 @@ const FOR_IT_SQL = `(NOT EXISTS (SELECT 1 FROM dbo.TicketRooms xr WHERE xr.Ticke
 // see.
 const ROOM_FIELDS = [
   "Created", "Room requested", "Room status", "Reason", "Subject", "Starts", "Ends", "Room", "Attendee count",
-  "Refreshments", "FOIA", "Lunch catered", "Comments", "Cancelled", "Closed automatically"
+  "Refreshments", "FOIA", "Lunch catered", "Comments", "Cancelled", "Closed automatically", "Calendar"
 ];
 
 // Ticket numbers are shown padded to 7 digits, like 0010000.
@@ -174,7 +174,6 @@ async function setStatus(db, ticket, statusId, actorId) {
   return warnings;
 }
 
-// Writes field-change history rows to dbo.TicketEvents.
 // Writes history lines. Each one is activity on the ticket, so it also moves
 // the ticket's UpdatedAt (shown as "Last activity" in the lists).
 async function recordEvents(db, ticketId, actorId, changes) {
