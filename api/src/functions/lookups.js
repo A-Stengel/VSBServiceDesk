@@ -12,7 +12,7 @@ const { logChange } = require("../shared/changelog");
 // costs.
 const PRICE_COLUMNS = { inventoryItems: ["UnitCost"], software: ["CostPerSeat"] };
 
-endpoint("getLookups", { methods: ["GET"], route: "lookups" }, async (request, context, user) => {
+endpoint("getLookups", { methods: ["GET"], route: "lookups", open: true }, async (request, context, user) => {
   const pool = await getConnection();
   const lookups = {};
   for (const [key, def] of Object.entries(LOOKUPS)) {
@@ -43,8 +43,16 @@ endpoint("getLookups", { methods: ["GET"], route: "lookups" }, async (request, c
         bookingDeclinedStatusId: settings.BookingDeclinedStatusId,
         bookingCancelledStatusId: settings.BookingCancelledStatusId,
         bookingTicketTypeId: settings.BookingTicketTypeId,
-        staffUserTypeId: settings.StaffUserTypeId,
-        emailSwitch: settings.EmailSwitch || "Off"
+        staffUserTypeId: settings.StaffUserTypeId
+      },
+      // Which emails go out, so the screens can say what will happen
+      email: {
+        reply: settings.OutReply === "On",
+        hrReply: settings.OutHrReply === "On",
+        closed: settings.OutClosed === "On",
+        survey: settings.OutSurvey === "On",
+        maintenance: settings.MaintenanceMode === "On",
+        maxAttachmentBytes: Math.floor(((settings.MaxEmailMB || 25) * 1024 * 1024) / 1.37)
       },
       eventGuidelines: settings.EventGuidelines || "",
       organization: {

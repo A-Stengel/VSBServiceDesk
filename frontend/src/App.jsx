@@ -16,6 +16,8 @@ import Inventory from "./pages/Inventory.jsx";
 import Settings from "./pages/Settings.jsx";
 import BookEvent from "./pages/BookEvent.jsx";
 import Rentals from "./pages/Rentals.jsx";
+import Survey from "./pages/Survey.jsx";
+import HeldMail from "./pages/HeldMail.jsx";
 
 // The signed-in person, every pick-list and the message banner, shared by
 // every page.
@@ -71,6 +73,29 @@ function SignIn() {
   );
 }
 
+// Shown instead of the app when it's closed to this person: maintenance mode,
+// or staff before the desk opens to them (Settings > System > Access).
+function Gate({ me }) {
+  const mailbox = me.MailboxAddress;
+  const maintenance = me.Gate === "maintenance";
+  return (
+    <>
+      <Header me={me} />
+      <main className="page">
+        <div className="card" style={{ maxWidth: 560 }}>
+          <h1>{maintenance ? "Down for maintenance" : "Coming soon"}</h1>
+          <p>
+            {maintenance
+              ? "The service desk is down for maintenance. Please try again later."
+              : "The new service desk isn't open to staff yet."}
+            {mailbox && <> Until then, email <a className="link" href={`mailto:${mailbox}`}>{mailbox}</a> for help.</>}
+          </p>
+        </div>
+      </main>
+    </>
+  );
+}
+
 const initials = (name) => name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join("");
 
 // While the site is starting, "me" is null and grey placeholders stand in for
@@ -92,6 +117,7 @@ function Header({ me }) {
 function SignedInHeader({ me }) {
   const roles = rolesOf(me);
   const appName = useApp()?.lookups?.organization?.appName || organization().appName;
+  const gated = !!me.Gate;
   const [open, setOpen] = useState(false);
   const menu = useRef(null);
   useEffect(() => {
@@ -109,11 +135,13 @@ function SignedInHeader({ me }) {
           {appName}
         </Link>
         <div className="top-actions">
-          <Link to="/new" className="btn submit">
-            <Icon name="plus" size={16} strokeWidth={2.4} />
-            Submit a request
-          </Link>
-          {roles.settings && (
+          {!gated && (
+            <Link to="/new" className="btn submit">
+              <Icon name="plus" size={16} strokeWidth={2.4} />
+              Submit a request
+            </Link>
+          )}
+          {roles.settings && !gated && (
             <Link to="/settings" className="hbtn" aria-label="Settings" title="Settings" style={{ width: 44, justifyContent: "center", padding: 0 }}>
               <Icon name="gear" size={22} strokeWidth={1.8} />
             </Link>
@@ -181,6 +209,7 @@ const CRUMBS = [
   [/^\/people\/\d+/, "Person"],
   [/^\/people/, "People"],
   [/^\/inventory/, "Inventory"],
+  [/^\/held-mail/, "Held mail"],
   [/^\/settings/, "Settings"]
 ];
 
@@ -276,6 +305,10 @@ export default function App() {
       updateTabIcon();
       step = 1;
       const user = await attemptStep(step, api.me);
+      if (user?.Gate) {
+        if (current()) setMe(user);
+        return;
+      }
       step = 2;
       const lists = await attemptStep(step, api.lookups);
       if (!current()) return;
@@ -289,9 +322,13 @@ export default function App() {
     }
   }, []);
 
-  useEffect(() => { start(); }, [start]);
+  const survey = pathname.startsWith("/survey/");
+  useEffect(() => { if (!survey) start(); }, [start, survey]);
 
+  // The survey works without signing in (outside people get it too)
+  if (survey) return <Routes><Route path="/survey/:token" element={<Survey />} /></Routes>;
   if (signedIn === false) return <SignIn />;
+  if (me?.Gate) return <Gate me={me} />;
   if (!me || !lookups) {
     return (
       <>
@@ -323,6 +360,7 @@ export default function App() {
           {roles.technician && <Route path="/people" element={<People />} />}
           {roles.technician && <Route path="/people/:id" element={<Person />} />}
           {roles.technician && <Route path="/inventory" element={<Inventory />} />}
+          {roles.technician && <Route path="/held-mail" element={<HeldMail />} />}
           {roles.technician && <Route path="/licenses" element={<Navigate to="/inventory?tab=licenses" replace />} />}
           {roles.settings && <Route path="/settings" element={<Settings />} />}
           <Route path="*" element={<p>Page not found.</p>} />

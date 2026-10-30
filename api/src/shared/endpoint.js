@@ -1,12 +1,29 @@
 const { app } = require("@azure/functions");
 const { getCurrentUser } = require("./auth");
 const { HttpError } = require("./errors");
+const { getSettings, isOn } = require("./settings");
+
+// Who the web app is closed to right now, from Settings > System > Access:
+// "maintenance" (everyone but technicians and admins) or "closed" (staff,
+// while "Staff can use the web app" is off; technicians, admins and Event
+// Managers keep working). Null when this person can use it.
+function gateFor(settings, user) {
+  if (isOn(settings, "MaintenanceMode") && !user.IsTechnician) return "maintenance";
+  if (settings.StaffWebAccess === "Off" && !user.IsTechnician && !user.IsEventManager) return "closed";
+  return null;
+}
+
+const GATE_MESSAGES = {
+  maintenance: "The service desk is down for maintenance. Please try again later.",
+  closed: "The new service desk isn't open to staff yet."
+};
 
 // Registers an HTTP function that looks up the signed-in user, checks their
 // role ("technician", "admin" or "eventManager" when given), turns HttpError into a clean JSON
 // response, and logs anything else as a generic 500 so SQL errors never reach
-// the browser.
-function endpoint(name, { methods, route, role, failMessage }, handler) {
+// the browser. Unless "open" is set, people the web app is closed to (see
+// gateFor) are refused, so the closed page can't be got around.
+function endpoint(name, { methods, route, role, failMessage, open = false }, handler) {
   app.http(name, {
     methods,
     route,
@@ -14,6 +31,10 @@ function endpoint(name, { methods, route, role, failMessage }, handler) {
     handler: async (request, context) => {
       try {
         const user = await getCurrentUser(request);
+        if (!open) {
+          const gate = gateFor(await getSettings(), user);
+          if (gate) return { status: 403, jsonBody: { error: GATE_MESSAGES[gate], gate } };
+        }
         if (role === "technician" && !user.IsTechnician) throw new HttpError(403, "Only technicians can do that");
         if (role === "admin" && !user.IsAdmin) throw new HttpError(403, "Only admins can do that");
         if (role === "eventManager" && !user.IsEventManager) throw new HttpError(403, "Only event managers can do that");
@@ -137,6 +158,7 @@ const isForeignKeyViolation = (error) => error.number === 547;
 
 module.exports = {
   endpoint,
+  gateFor,
   readJson,
   readBodyWithFiles,
   optionalId,

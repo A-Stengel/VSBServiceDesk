@@ -22,9 +22,26 @@ const config = {
 
 let poolPromise;
 
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// A database that is waking up or failing over can refuse the first
+// connection straight away ("not currently available"), so a quick refusal
+// is tried once more after a short wait. A slow timeout isn't, to stay
+// inside the Static Web App's time limit.
+async function connect() {
+  const started = Date.now();
+  try {
+    return await new sql.ConnectionPool(config).connect();
+  } catch (error) {
+    if (Date.now() - started > 10000) throw error;
+    await wait(3000);
+    return new sql.ConnectionPool(config).connect();
+  }
+}
+
 function getConnection() {
   if (!poolPromise) {
-    poolPromise = new sql.ConnectionPool(config).connect().catch((err) => {
+    poolPromise = connect().catch((err) => {
       poolPromise = undefined; // allow a retry on the next request
       throw err;
     });

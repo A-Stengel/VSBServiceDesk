@@ -18,6 +18,7 @@ function sectionOf(meta) {
 const shown = (meta, value) => {
   if (value === null || value === undefined || value === "") return "empty";
   if (meta.type === "longtext" || meta.type === "richtext") return "new text";
+  if (meta.type === "datetime") return new Date(value).toISOString().slice(0, 16).replace("T", " ") + " UTC";
   return String(value);
 };
 
@@ -42,6 +43,16 @@ endpoint(
         const n = Number(value);
         if (!Number.isInteger(n) || n < 0) throw new HttpError(400, `${meta.label} must be a whole number`);
         value = n;
+      }
+      if (meta.type === "switch") {
+        if (value === true) value = "On";
+        if (value === false || value === null) value = "Off";
+        if (value !== "On" && value !== "Off") throw new HttpError(400, `${meta.label} must be On or Off`);
+      }
+      if (value !== null && meta.type === "datetime") {
+        const at = new Date(String(value));
+        if (Number.isNaN(at.getTime())) throw new HttpError(400, `${meta.label} must be a date and time`);
+        value = at.toISOString();
       }
       if (value !== null && meta.type === "choice" && !meta.choices.includes(value)) {
         throw new HttpError(400, `${meta.label} must be one of: ${meta.choices.join(", ")}`);
@@ -75,6 +86,21 @@ endpoint(
       }
       values.StaffEmailDomains = domains.join(", ");
     }
+    if ("SiteUrl" in values && values.SiteUrl !== null) {
+      const url = String(values.SiteUrl).trim().replace(/\/+$/, "");
+      if (!/^https:\/\/[^\s/]+$/.test(url)) throw new HttpError(400, "Enter the app's web address like https://servicedesk.example.org");
+      values.SiteUrl = url;
+    }
+    if ("MaxEmailMB" in values && values.MaxEmailMB !== null && (values.MaxEmailMB < 1 || values.MaxEmailMB > 150)) {
+      throw new HttpError(400, "The largest email must be between 1 and 150 MB");
+    }
+    if (values.MaintenanceMode === "On" && !(values.TestingMailboxAddress ?? before.TestingMailboxAddress)) {
+      throw new HttpError(400, "Set the testing mailbox (Settings > Organization) before turning maintenance mode on");
+    }
+    // Turning incoming mail on for the first time starts from now, so the
+    // mailbox's backlog never turns into tickets.
+    const incomingOn = ["InCreateTickets", "InAddReplies"].some((key) => values[key] === "On");
+    if (incomingOn && !before.InProcessAfter && !values.InProcessAfter) values.InProcessAfter = new Date().toISOString();
     await saveSettings(values);
     await withTransaction(async (tx) => {
       for (const [key, value] of Object.entries(values)) {

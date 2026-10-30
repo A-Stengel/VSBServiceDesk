@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, dayValue, formatDate, formatDay, formatWallRange, money } from "../api.js";
 import { useApp } from "../App.jsx";
 import PersonPicker from "../components/PersonPicker.jsx";
@@ -65,23 +65,41 @@ export default function TicketPage() {
           {data.cc.length > 0 && <p className="muted small">CC: {data.cc.join(", ")}</p>}
         </div>
 
+        {ticket.MergedIntoId && (
+          <p className="flag">
+            Merged into <Link className="link" to={`/tickets/${ticket.MergedIntoId}`}>Ticket #{ticket.MergedIntoNumber}</Link>. Replies to this ticket's emails go there.
+          </p>
+        )}
+
+        {/* Newest first, like the emails, with the reply box on top */}
+        <ReplyBox ticket={ticket} access={access} onSaved={load} />
+
         {data.conversations.map((c) => (
           <div key={c.Id} className={`card message ${c.IsTechnicianNote ? "note" : c.Direction === "out" ? "out" : ""}`}>
             <div className="meta">
               <strong>{c.AuthorName}</strong> · {formatDate(c.CreatedAt)}
               {c.IsTechnicianNote && ` · ${noteLabel(c)}`}
+              {c.CameByEmail === 1 && " · by email"}
+              {c.MergedFromTicketId && <> · merged from <Link className="link" to={`/tickets/${c.MergedFromTicketId}`}>#{String(c.MergedFromTicketId).padStart(7, "0")}</Link></>}
+              {!c.IsTechnicianNote && c.Direction === "out" && c.EmailedAt && " · Emailed"}
+              {!c.IsTechnicianNote && c.Direction === "out" && c.EmailNote && <span className="warn"> · {c.EmailNote}</span>}
             </div>
             <RichText value={c.Body} />
             <Files attachments={data.attachments.filter((a) => a.ConversationId === c.Id)} />
           </div>
         ))}
-
-        <ReplyBox ticket={ticket} access={access} onSaved={load} />
       </div>
 
       <aside>
         {isBooking && <EventPanel ticket={ticket} access={access} editing={editing} onEdit={() => setEditing(true)} onSaved={load} />}
         {/* A room-only request is HR's, so its IT status means nothing to the requester */}
+        {isTech && data.survey?.AnsweredAt && (
+          <div className="card">
+            <h3>Satisfaction survey</h3>
+            <p style={{ margin: 0 }}><strong>{data.survey.Rating} of 5</strong> <span className="muted small">· {formatDate(data.survey.AnsweredAt)}</span></p>
+            {data.survey.Comment && <p style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}>{data.survey.Comment}</p>}
+          </div>
+        )}
         {isTech ? <TechnicianPanel ticket={ticket} onSaved={load} />
           : !hrView && !(ticket.HasRoom && !ticket.HasEquipment) && <RequesterPanel ticket={ticket} />}
         {access.equipment && (ticket.UsesInventory || data.items.length > 0) && <ItemsPanel ticket={ticket} items={data.items} onSaved={load} />}
@@ -274,6 +292,7 @@ function ReplyBox({ ticket, access, onSaved }) {
   }
 
   const noteName = tech ? "Internal note" : "HR note";
+  const tooBig = !!lookups.email && files.reduce((sum, f) => sum + f.size, 0) > lookups.email.maxAttachmentBytes;
   const placeholder = isNote
     ? tech ? "Internal note, only technicians see this" : "HR note, HR and technicians see this"
     : tech || hr ? "Write a reply to the requester" : "Write a reply";
@@ -288,6 +307,11 @@ function ReplyBox({ ticket, access, onSaved }) {
       )}
       <RichEditor value={body} onChange={setBody} images label={isNote ? noteName : "Reply"} placeholder={placeholder} onError={setError} />
       <input key={fileKey} type="file" multiple onChange={(e) => setFiles([...e.target.files])} aria-label="Attach files" />
+      {(tech || hr) && !isNote && tooBig && (
+        <p className="warn small" style={{ margin: 0 }}>
+          These files are more than one email can carry (about {(lookups.email.maxAttachmentBytes / 1024 / 1024).toFixed(0)} MB). Attach fewer or smaller files.
+        </p>
+      )}
       {tech && (
         <label>
           Then set status to
@@ -300,7 +324,7 @@ function ReplyBox({ ticket, access, onSaved }) {
       {error && <p className="error">{error}</p>}
       <div>
         <button className="btn pri" disabled={saving || (!hasContent(body) && !files.length)}>
-          {saving ? "Sending…" : isNote ? "Add note" : "Send reply"}
+          {saving ? "Sending…" : isNote ? "Add note" : (tech || hr) && !(tech ? lookups.email?.reply : lookups.email?.hrReply) ? "Save reply (not emailed)" : "Send reply"}
         </button>
       </div>
     </form>
@@ -352,10 +376,11 @@ function TechnicianPanel({ ticket, onSaved }) {
   }
 
   function close() {
-    const held = lookups.defaults.emailSwitch === "On"
-      ? "The survey goes to the requester."
-      : "The survey email is held while outgoing email is off.";
-    save({ statusId: lookups.defaults.closedStatusId }, `Ticket ${ticket.Number} closed. ${held}`);
+    const { closed, survey } = lookups.email || {};
+    const told = ticket.HasRoom && !ticket.HasEquipment ? ""
+      : closed || survey ? `The ${[closed && "closed email", survey && "survey"].filter(Boolean).join(" and ")} go${closed && survey ? "" : "es"} to the requester.`
+      : "No closed email or survey goes out while they're switched off.";
+    save({ statusId: lookups.defaults.closedStatusId }, `Ticket ${ticket.Number} closed. ${told}`);
   }
 
   const select = (label, key, list, value, allowEmpty) => (
@@ -425,7 +450,47 @@ function TechnicianPanel({ ticket, onSaved }) {
       {error && <p className="error">{error}</p>}
       {!ticket.IsClosed && <button type="button" className="btn pri block" onClick={close}>Move to closure</button>}
       {ticket.ClosedAt && <p className="muted small">Closed {formatDate(ticket.ClosedAt)}</p>}
+      {!ticket.MergedIntoId && !ticket.HasRoom && <MergeBox ticket={ticket} />}
     </div>
+  );
+}
+
+// Merging this ticket into another (for example when someone emails twice).
+// This one closes with a link to the other, and sends no email.
+function MergeBox({ ticket }) {
+  const { notify } = useApp();
+  const navigate = useNavigate();
+  const [open, setOpen] = useState(false);
+  const [number, setNumber] = useState("");
+  const [error, setError] = useState("");
+
+  async function merge(e) {
+    e.preventDefault();
+    const intoId = Number(number.replace(/\D/g, ""));
+    if (!intoId) return setError("Type the ticket number to merge into");
+    if (!confirm(`Merge ticket ${ticket.Number} into ${String(intoId).padStart(7, "0")}? This ticket closes and its replies are copied there.`)) return;
+    try {
+      await api.mergeTicket(ticket.Id, intoId);
+      notify(`Ticket ${ticket.Number} merged into ${String(intoId).padStart(7, "0")}.`);
+      navigate(`/tickets/${intoId}`);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  if (!open) return <button type="button" className="link small" onClick={() => setOpen(true)}>Merge into another ticket</button>;
+  return (
+    <form onSubmit={merge} className="form" style={{ gap: 8 }}>
+      <label>
+        Merge into ticket number
+        <input value={number} onChange={(e) => setNumber(e.target.value)} placeholder="0010023" inputMode="numeric" />
+      </label>
+      {error && <p className="error">{error}</p>}
+      <div className="row">
+        <button className="btn sm pri">Merge</button>
+        <button type="button" className="btn sm" onClick={() => { setOpen(false); setError(""); }}>Cancel</button>
+      </div>
+    </form>
   );
 }
 

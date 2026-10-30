@@ -60,22 +60,33 @@ final design in [docs/design.md](docs/design.md). It covers build steps 1 to
   keeps its own change history. Event Managers see only Rooms, Booking
   guidelines and Room statuses.
 - New ticket numbers start at 0010000.
+- Email, each part behind its own switch in Settings > Email, and every
+  switch Off until you turn it on (script 13):
+  - Incoming: new emails become tickets, replies land on their ticket
+    (found by `Ticket #0010023` or the old desk's `##0005854##` in the
+    subject, or by the reply headers), a reply always reopens a closed
+    ticket, and mail from unknown senders can wait in Held mail. The
+    mailbox is only read: nothing is moved, deleted or marked read.
+  - Outgoing: ticket received, the IT team alert, technician and HR
+    replies (with the conversation below, newest first), the requester
+    reply alert, the waiting on you warning, closed and survey, and the
+    booking emails. Branded with the logo and header color. Replies that
+    weren't emailed say "Not emailed" on the ticket.
+  - Automations: the business day 4 automatic close (8:15 in the morning in
+    the desk's time zone, skipping weekends and Holidays) and writing room
+    bookings to the events calendar.
+- The satisfaction survey page (no sign-in needed), with the answer shown to
+  technicians on the ticket.
+- Merging a ticket into another, Held mail, error alert emails, and the
+  Email status line in Settings.
+- Settings > System > Access and maintenance: keep staff out of the web app
+  until the desk opens to them, and maintenance mode (only technicians and
+  admins get in, and all mail is read from and sent to the testing
+  mailbox).
 
 ## Not in this MVP yet
 
-These are the next build steps from the design:
-
-- Email. The MVP sends no email and does not read `servicedesk@vsb.org`, so
-  the live mailbox is untouched. The "ticket received" email, the IT team
-  notice, reply emails, the business day 3 warning, the business day 4
-  automatic close and the survey come next, behind the Outgoing email switch
-  (Off by default).
-- The survey page.
-- Maintenance mode (staff locked out, mail only to the testing mailbox) and
-  the email on/off switches.
-- Event booking emails and the VSB Events calendar. Nothing is emailed to HR
-  yet and nothing is written to the calendar. Both come with the email step.
-- The one-time import from the SharePoint lists.
+- The one-time import from the SharePoint lists (waits on a sample export).
 - Reports.
 
 ## What's in the zip
@@ -431,3 +442,91 @@ func azure functionapp publish func-vsb-servicedesk --javascript --build remote
 ```
 
 The website updates on its own when the change is merged.
+
+### Email, automations and maintenance mode (script 13)
+
+Run `13_email_and_automation.sql` once, then publish the API (the same two
+commands as above). It is safe to run twice. In plain terms it:
+
+- Adds the Settings > Email switches (Incoming, Outgoing, Automations) and
+  sets **every one to Off**. Nothing is read from or sent to any mailbox,
+  and nothing is written to the calendar, until you turn a switch on. The
+  old single "Outgoing email" setting is removed and its value is not
+  copied.
+- Adds "Staff can use the web app" (On) and "Maintenance mode" (Off) under
+  Settings > System > Access and maintenance.
+- Adds the error alert list (empty, so no alerts go out until you fill it),
+  the app's web address for links in emails, and four new email templates.
+  The six existing template subjects change to the `Ticket #0010023:
+  Subject` form, only where nobody has edited them.
+- Adds the tables for mail the app has read and sent, merged tickets, and
+  the Email status line.
+
+#### Let the app reach the mailboxes
+
+The Function App signs in to Microsoft Graph as its managed identity. Give
+it access with Exchange Online "RBAC for Applications", limited to the
+desk's mailboxes, so it can't reach any other mailbox. Don't also grant the
+Graph permissions in Entra ID: those would cover every mailbox.
+
+1. In the Azure portal, open Microsoft Entra ID > Enterprise applications,
+   change the filter to Managed Identities, and open
+   `func-vsb-servicedesk`. Note its **Application ID** and **Object ID**.
+2. In PowerShell, as an Exchange admin:
+
+```powershell
+Connect-ExchangeOnline
+$appId = "<Application ID>"
+$objectId = "<Object ID>"
+New-ServicePrincipal -AppId $appId -ObjectId $objectId `
+  -DisplayName "func-vsb-servicedesk"
+$scope = "Service desk mailboxes"
+$filter = "PrimarySmtpAddress -eq 'servicedesk@vsb.org'" +
+  " -or PrimarySmtpAddress -eq 'sdtest@vsb.org'" +
+  " -or PrimarySmtpAddress -eq 'VSBEventsCalender@vsb.org'"
+New-ManagementScope -Name $scope -RecipientRestrictionFilter $filter
+$roles = "Application Mail.Read", "Application Mail.Send",
+  "Application Calendars.ReadWrite"
+foreach ($role in $roles) {
+  New-ManagementRoleAssignment -App $objectId -Role $role `
+    -CustomResourceScope $scope
+}
+Test-ServicePrincipalAuthorization -Identity $objectId -Resource sdtest@vsb.org
+Test-ServicePrincipalAuthorization -Identity $objectId -Resource someone.else@vsb.org
+```
+
+The first test should list the three roles with `InScope` True; the second
+should show `InScope` False. Changes can take up to an hour to apply.
+
+Optional: the Graph permission User.Read.All (granted in Entra ID) lets the
+app tell shared mailboxes apart when it creates accounts for new senders.
+Without it they count as staff, and you can change the Account type on the
+person's page.
+
+#### The events calendar
+
+The calendar is written as a mailbox (`/users/VSBEventsCalender@vsb.org`).
+Microsoft doesn't support this kind of app access on Microsoft 365 group
+calendars, so test it during the trial: turn on "Write room bookings to the
+events calendar", book a room, and check the calendar. If it doesn't
+appear, the ticket's history says "Events calendar not updated" with the
+reason, and the switch can go back Off while a fallback is chosen.
+
+#### Turning email on (trial first)
+
+1. Settings > Organization: check the testing mailbox (`sdtest@vsb.org`)
+   and the app's web address.
+2. Settings > Notifications: add yourself to Error alert recipients.
+3. Settings > System > Access and maintenance: turn on Maintenance mode.
+   Staff and HR now see a "down for maintenance" page. All mail is read
+   from and sent to the testing mailbox only, with the real recipients
+   written at the top of each email.
+4. Settings > Email: turn on the Incoming and Outgoing switches you want to
+   try. Turning incoming on for the first time sets "Only read mail
+   received after" to that moment, so old mail never becomes tickets.
+5. On cutover day, turn the old desk's Power Automate flow off, then turn
+   Maintenance mode off. From then on the app reads and sends from
+   `servicedesk@vsb.org`.
+
+Settings > Email shows the last mailbox check, anything failing, and how
+much mail went out in the last day.

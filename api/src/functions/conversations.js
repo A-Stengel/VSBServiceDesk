@@ -5,6 +5,8 @@ const { getSettings } = require("../shared/settings");
 const { saveAttachments, finishRichText, readInlineNames } = require("../shared/attachments");
 const { hasContent } = require("../shared/richtext");
 const { loadTicket, loadVisibleTicket, setStatus, forViewer, accessOf } = require("../shared/tickets");
+const { replyAdded, ticketClosed } = require("../shared/notify");
+const { attachmentRoom } = require("../shared/mailer");
 
 const MAX_MESSAGE = 200000;
 
@@ -43,6 +45,13 @@ endpoint(
       throw new HttpError(400, "This ticket is closed. Please submit a new request.");
     }
 
+    // A reply that will be emailed must fit in one email from the mailbox.
+    const total = files.reduce((sum, f) => sum + f.buffer.length, 0);
+    if (staffSide && !isNote && total > attachmentRoom(settings)) {
+      const mb = (bytes) => (bytes / 1024 / 1024).toFixed(1);
+      throw new HttpError(400, `These files add up to ${mb(total)} MB. An email from the desk can carry about ${mb(attachmentRoom(settings))} MB of attachments, so attach fewer or smaller files.`);
+    }
+
     let nextStatusId = null;
     if (user.IsTechnician) {
       nextStatusId = optionalId(data.statusId, "Status") || (isNote ? null : settings.AwaitingStatusId);
@@ -51,6 +60,7 @@ endpoint(
     }
 
     let warnings = [];
+    let conversationId;
     await withTransaction(async (tx) => {
       const created = await tx
         .request()
@@ -64,7 +74,7 @@ endpoint(
           OUTPUT INSERTED.Id
           VALUES (@TicketId, @AuthorId, N'', @IsNote, @ForHr, @Direction)
         `);
-      const conversationId = created.recordset[0].Id;
+      conversationId = created.recordset[0].Id;
       const saved = await saveAttachments(tx, id, conversationId, files, user.Id, inlineNames);
       const body = (await finishRichText(tx, id, draft, saved)) || "<p>(attachment)</p>";
       await tx.request().input("Id", sql.Int, conversationId).input("Body", sql.NVarChar(sql.MAX), body)
@@ -74,8 +84,9 @@ endpoint(
       if (nextStatusId) warnings = await setStatus(tx, ticket, nextStatusId, user.Id);
     });
 
-    // Emailing the reply to the requester (or the technician) comes with the
-    // email step of the build; see the README.
-    return { status: 201, jsonBody: { ticket: forViewer(await loadTicket(pool, id), user), warnings } };
+    if (!isNote) await replyAdded(id, conversationId, user.IsTechnician ? "technician" : asHr ? "hr" : "requester", context);
+    const after = await loadTicket(pool, id);
+    if (after.IsClosed && !ticket.IsClosed) await ticketClosed(id, context);
+    return { status: 201, jsonBody: { ticket: forViewer(after, user), warnings } };
   }
 );
