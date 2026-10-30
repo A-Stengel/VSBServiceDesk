@@ -60,6 +60,7 @@ export default function Tickets() {
     status: (t) => t.StatusName,
     priority: (t) => t.PriorityRank,
     created: (t) => t.CreatedAt,
+    activity: (t) => t.UpdatedAt,
     department: (t) => t.DepartmentName || ""
   }), []);
 

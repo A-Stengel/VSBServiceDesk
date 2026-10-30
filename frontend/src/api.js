@@ -150,6 +150,19 @@ export const dayValue = (value) => (value ? String(value).slice(0, 10) : "");
 export const money = (value) =>
   Number(value || 0).toLocaleString(undefined, { style: "currency", currency: "USD" });
 
+// "30 minutes ago", "1 day ago", "2 months ago": how long ago, at any age.
+// Used for Last activity in the lists, with the exact time on hover.
+export function howLongAgo(value) {
+  if (!value) return "";
+  const seconds = Math.max(0, (Date.now() - new Date(value).getTime()) / 1000);
+  const units = [["year", 31536000], ["month", 2592000], ["day", 86400], ["hour", 3600], ["minute", 60]];
+  for (const [unit, size] of units) {
+    const n = Math.floor(seconds / size);
+    if (n >= 1) return `${n} ${unit}${n === 1 ? "" : "s"} ago`;
+  }
+  return "Just now";
+}
+
 // "3 minutes ago", "Yesterday", or the date, for activity lists.
 export function timeAgo(value) {
   if (!value) return "";

@@ -175,7 +175,10 @@ async function setStatus(db, ticket, statusId, actorId) {
 }
 
 // Writes field-change history rows to dbo.TicketEvents.
+// Writes history lines. Each one is activity on the ticket, so it also moves
+// the ticket's UpdatedAt (shown as "Last activity" in the lists).
 async function recordEvents(db, ticketId, actorId, changes) {
+  if (!changes.length) return;
   for (const change of changes) {
     await db
       .request()
@@ -189,6 +192,7 @@ async function recordEvents(db, ticketId, actorId, changes) {
         VALUES (@TicketId, @ActorId, @Field, @OldValue, @NewValue)
       `);
   }
+  await db.request().input("Id", sql.Int, ticketId).query("UPDATE dbo.Tickets SET UpdatedAt = SYSUTCDATETIME() WHERE Id = @Id");
 }
 
 module.exports = {

@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { formatDate } from "../api.js";
+import { formatDate, howLongAgo } from "../api.js";
 import { SortTh } from "./ListView.jsx";
 
 // The ticket list, with sortable headers (the list's useListView decides the
@@ -8,7 +8,7 @@ export default function TicketTable({ tickets, list, technician }) {
   if (!tickets.length) return <p className="empty">No tickets here.</p>;
   return (
     <div className="card flush scroll">
-      <table className="tbl" style={{ minWidth: 900 }}>
+      <table className="tbl" style={{ minWidth: 1000 }}>
         <thead>
           <tr>
             <SortTh list={list} col="number">#</SortTh>
@@ -19,6 +19,7 @@ export default function TicketTable({ tickets, list, technician }) {
             <SortTh list={list} col="status">Status</SortTh>
             <SortTh list={list} col="priority">Priority</SortTh>
             <SortTh list={list} col="created">Created</SortTh>
+            <SortTh list={list} col="activity">Last activity</SortTh>
             {technician && <SortTh list={list} col="department">Department</SortTh>}
           </tr>
         </thead>
@@ -38,6 +39,7 @@ export default function TicketTable({ tickets, list, technician }) {
               <td><span className="pill" style={{ background: t.StatusColor || undefined }}>{t.StatusName}</span></td>
               <td>{t.PriorityName}</td>
               <td className="small">{formatDate(t.CreatedAt)}</td>
+              <td className="small" title={formatDate(t.UpdatedAt)}>{howLongAgo(t.UpdatedAt)}</td>
               {technician && <td>{t.DepartmentName}</td>}
             </tr>
           ))}
