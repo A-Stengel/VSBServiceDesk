@@ -15,7 +15,7 @@ const { getSettings } = require("../shared/settings");
 const { getHoldings } = require("../shared/holdings");
 const { readItems, addTicketItem, assertSeats } = require("../shared/inventory");
 const { logChange, listChanges } = require("../shared/changelog");
-const { TICKET_SELECT, withNumber } = require("../shared/tickets");
+const { TICKET_SELECT, withNumber, recordEvents } = require("../shared/tickets");
 
 const PEOPLE_SELECT = `
   SELECT x.*, ut.Name AS UserTypeName, d.Name AS DepartmentName,
@@ -192,6 +192,7 @@ endpoint(
         if (!item) throw new HttpError(400, "They don't hold that item any more");
         await tx.request().input("Id", sql.Int, item.Id).query("UPDATE dbo.TicketItems SET ReturnedAt = SYSUTCDATETIME() WHERE Id = @Id");
         summary = `${item.Name}${item.Quantity > 1 ? ` (x${item.Quantity})` : ""} returned`;
+        if (item.TicketId) await recordEvents(tx, item.TicketId, me.Id, [{ field: "Item returned", newValue: item.Name }]);
       }
       await logChange(tx, { area: "person", entityId: id, actorId: me.Id, summary });
     });

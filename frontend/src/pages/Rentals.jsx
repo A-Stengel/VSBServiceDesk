@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, formatDay, formatWallRange } from "../api.js";
+import { api, formatDate, formatDay, formatWallRange, howLongAgo } from "../api.js";
 import { useApp } from "../App.jsx";
 import { ListTabs, ListToolbar, SortTh, useListView } from "../components/ListView.jsx";
 
@@ -56,7 +56,8 @@ export default function Rentals() {
     room: (r) => r.RoomName || "",
     roomStatus: (r) => r.RoomStatusName || "",
     equipment: (r) => r.EquipmentStage,
-    requester: (r) => r.RequesterName
+    requester: (r) => r.RequesterName,
+    activity: (r) => r.UpdatedAt
   }), []);
 
   const list = useListView({
@@ -93,7 +94,7 @@ export default function Rentals() {
       {rows && !rows.length && <p className="empty">Nothing here.</p>}
       {rows && rows.length > 0 && (
         <div className="card flush scroll">
-          <table className="tbl" style={{ minWidth: 860 }}>
+          <table className="tbl" style={{ minWidth: 960 }}>
             <thead>
               <tr>
                 <SortTh list={list} col="title">Title</SortTh>
@@ -102,6 +103,7 @@ export default function Rentals() {
                 <SortTh list={list} col="roomStatus">Room status</SortTh>
                 {equipment && <SortTh list={list} col="equipment">Equipment</SortTh>}
                 <SortTh list={list} col="requester">Requested by</SortTh>
+                <SortTh list={list} col="activity">Last activity</SortTh>
               </tr>
             </thead>
             <tbody>
@@ -128,6 +130,7 @@ export default function Rentals() {
                     </td>
                   )}
                   <td>{r.RequesterName}</td>
+                  <td className="small" title={formatDate(r.UpdatedAt)}>{howLongAgo(r.UpdatedAt)}</td>
                 </tr>
               ))}
             </tbody>
