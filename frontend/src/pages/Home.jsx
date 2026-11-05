@@ -54,6 +54,7 @@ export default function Home() {
           desc={roles.eventManagerOnly ? "Confirm or decline room requests" : "Rooms and equipment, one record each"} />
       )}
       {!roles.worker && <Quick to="/events" icon="calendar" title="My rentals & events" desc="Equipment and rooms you asked for" />}
+      {roles.manager && !roles.technician && <Quick to="/team" icon="people" title="My team" desc="Your people and what each one has" />}
       {roles.technician && <Quick to="/people" icon="people" title="People" desc="Roles, departments, what each person holds" />}
       {roles.technician && <Quick to="/inventory" icon="key" title="Inventory" desc="Equipment and software licenses" />}
     </div>
@@ -98,7 +99,7 @@ export default function Home() {
           <div className="sec">Create new</div>
           <div className="quick">
             <Quick to="/new?type=support" icon="support" title="Support" desc="Something is broken or you have a question" />
-            <Quick to="/new?type=access" icon="access" title="Access & Equipment" desc="Onboarding, changes, off boarding" />
+            {roles.accessRequests && <Quick to="/new?type=access" icon="access" title="Access & Equipment" desc="Onboarding, changes, off boarding" />}
             <Quick to="/events/new" icon="calendar" title="Equipment Rental / Event Booking" desc="Borrow equipment, book a room, or both" />
           </div>
 

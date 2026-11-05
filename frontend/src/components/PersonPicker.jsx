@@ -2,12 +2,13 @@ import { useEffect, useState } from "react";
 import { api } from "../api.js";
 
 // Type-ahead for picking a person. Technicians search everyone; other staff
-// search active staff only.
+// search active staff only. managedOnly keeps it to the departments the
+// person manages.
 //
 // The pickers sit inside <label>s. The buttons call preventDefault so the
 // label doesn't pass the click on to whichever button replaces them, which
 // undid the pick straight away.
-export default function PersonPicker({ value, onChange, technician, placeholder = "Start typing a name or email" }) {
+export default function PersonPicker({ value, onChange, technician, managedOnly, placeholder = "Start typing a name or email" }) {
   const [text, setText] = useState("");
   const [results, setResults] = useState([]);
 
@@ -17,11 +18,11 @@ export default function PersonPicker({ value, onChange, technician, placeholder 
       return;
     }
     const timer = setTimeout(() => {
-      const search = technician ? api.users({ search: text }) : api.searchPeople(text);
+      const search = technician ? api.users({ search: text }) : api.searchPeople(text, managedOnly);
       search.then((rows) => setResults(rows.slice(0, 20))).catch(() => setResults([]));
     }, 250);
     return () => clearTimeout(timer);
-  }, [text, technician]);
+  }, [text, technician, managedOnly]);
 
   if (value) {
     return (

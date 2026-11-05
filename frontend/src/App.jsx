@@ -18,6 +18,7 @@ import BookEvent from "./pages/BookEvent.jsx";
 import Rentals from "./pages/Rentals.jsx";
 import Survey from "./pages/Survey.jsx";
 import HeldMail from "./pages/HeldMail.jsx";
+import MyTeam from "./pages/MyTeam.jsx";
 
 // The signed-in person, every pick-list and the message banner, shared by
 // every page.
@@ -38,7 +39,11 @@ const worthRetrying = (error) => !error.status || error.status >= 500 || error.s
 export function rolesOf(me) {
   const technician = !!me.IsTechnician;
   const eventManagerOnly = !!me.IsEventManager && !technician;
+  const manager = (me.ManagedDepartmentIds || []).length > 0;
   return {
+    manager,
+    // Access & Equipment: managers (their own departments), IT and HR
+    accessRequests: technician || !!me.IsEventManager || manager,
     technician,
     admin: !!me.IsAdmin,
     eventManagerOnly,
@@ -206,6 +211,7 @@ const CRUMBS = [
   [/^\/tickets/, "Tickets"],
   [/^\/events\/new/, "Equipment Rental / Event Booking"],
   [/^\/events/, "Rentals & Events"],
+  [/^\/team/, "My team"],
   [/^\/people\/\d+/, "Person"],
   [/^\/people/, "People"],
   [/^\/inventory/, "Inventory"],
@@ -357,6 +363,7 @@ export default function App() {
           <Route path="/events/mine" element={<Navigate to="/events" replace />} />
           {/* Bookings used to have their own page; they're tickets now */}
           <Route path="/events/:id" element={<Navigate to="/events" replace />} />
+          {roles.manager && <Route path="/team" element={<MyTeam />} />}
           {roles.technician && <Route path="/people" element={<People />} />}
           {roles.technician && <Route path="/people/:id" element={<Person />} />}
           {roles.technician && <Route path="/inventory" element={<Inventory />} />}

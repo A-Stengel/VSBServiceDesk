@@ -127,7 +127,8 @@ export const api = {
   licenses: () => request("GET", "licenses"),
 
   users: (filters = {}) => request("GET", "users" + query(filters)),
-  searchPeople: (q) => request("GET", "people/search" + query({ q })),
+  searchPeople: (q, managed) => request("GET", "people/search" + query({ q, managed: managed ? 1 : undefined })),
+  myTeam: () => request("GET", "people/team"),
   createUser: (data) => request("POST", "users", data),
   updateUser: (id, data) => request("PATCH", `users/${id}`, data),
 
