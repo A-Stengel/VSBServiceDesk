@@ -34,6 +34,10 @@ export default function TicketPage() {
   const isTech = me.IsTechnician;
   const hrView = access.roomOnlyView;
   const isBooking = ticket.TicketTypeId === lookups.defaults.bookingTicketTypeId && (ticket.HasRoom || ticket.StartAt);
+  const showChecklist = access.equipment && (data.checklist.length > 0 || (isTech && ticket.UsesChecklist));
+  const showItems = access.equipment && (ticket.UsesInventory || data.items.length > 0);
+  // Onboarding, access change and off boarding tickets (the ones with a checklist)
+  const accessWork = !!(ticket.UsesChecklist || ticket.ChecklistSource || data.checklist.length > 0);
   const noteLabel = (c) => (c.VisibleToEventManagers ? "HR note (the requester can't see this)" : "Internal note (only technicians see this)");
 
   return (
@@ -65,6 +69,12 @@ export default function TicketPage() {
           <Files attachments={data.attachments.filter((a) => !a.ConversationId)} />
           {data.cc.length > 0 && <p className="muted small">CC: {data.cc.join(", ")}</p>}
         </div>
+
+        {/* Onboarding, access change and off boarding work sits in the main
+            area, where the checklist and items have room */}
+        {accessWork && (ticket.NewHireFirstName || ticket.JobTitleName) && <NewHirePanel ticket={ticket} />}
+        {accessWork && showChecklist && <ChecklistPanel ticket={ticket} checklist={data.checklist} onSaved={load} />}
+        {accessWork && showItems && <ItemsPanel ticket={ticket} items={data.items} onSaved={load} />}
 
         {ticket.MergedIntoId && (
           <p className="flag">
@@ -106,12 +116,9 @@ export default function TicketPage() {
         )}
         {isTech ? <TechnicianPanel ticket={ticket} onSaved={load} />
           : !hrView && !(ticket.HasRoom && !ticket.HasEquipment) && <RequesterPanel ticket={ticket} />}
-        {(ticket.NewHireFirstName || ticket.JobTitleName) && <NewHirePanel ticket={ticket} />}
+        {!accessWork && (ticket.NewHireFirstName || ticket.JobTitleName) && <NewHirePanel ticket={ticket} />}
         {(ticket.AsksForInk || data.ink?.length > 0) && <InkPanel ticket={ticket} ink={data.ink || []} onSaved={load} />}
-        {access.equipment && (ticket.UsesInventory || data.items.length > 0) && <ItemsPanel ticket={ticket} items={data.items} onSaved={load} />}
-        {access.equipment && (data.checklist.length > 0 || (isTech && ticket.UsesChecklist)) && (
-          <ChecklistPanel ticket={ticket} checklist={data.checklist} onSaved={load} />
-        )}
+        {!accessWork && showItems && <ItemsPanel ticket={ticket} items={data.items} onSaved={load} />}
         {data.events.length > 0 && (
           <div className="card">
             <h3>History</h3>
