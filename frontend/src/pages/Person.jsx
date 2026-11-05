@@ -17,11 +17,13 @@ export default function Person() {
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
   const [assign, setAssign] = useState("");
+  const [editing, setEditing] = useState(false);
 
   const load = useCallback(() => api.person(id).then(setData).catch((e) => setError(e.message)), [id]);
   useEffect(() => {
     load();
   }, [load]);
+  useEffect(() => setEditing(false), [id]);
 
   async function run(promise, message) {
     try {
@@ -88,15 +90,36 @@ export default function Person() {
   return (
     <div className="split">
       <div>
-        <div className="card">
-          <h1 style={{ marginBottom: 2 }}>{person.DisplayName}</h1>
-          <div className="muted">{person.Email}</div>
-          <div className="row center" style={{ gap: 8, marginTop: 10 }}>
-            <span className="pill">{roleLabel(person, lookups)}</span>
-            <span className="pill">{person.DepartmentName || "No department"}</span>
-            <span className="pill" style={{ background: person.IsActive ? "#dcfce7" : "#e5e7eb" }}>{person.IsActive ? "Active" : "Off"}</span>
+        {editing ? (
+          <ProfileForm
+            person={person}
+            onCancel={() => setEditing(false)}
+            onSaved={async () => {
+              setEditing(false);
+              notify("Profile saved.");
+              await load();
+            }}
+          />
+        ) : (
+          <div className="card">
+            <div className="row spread" style={{ alignItems: "flex-start" }}>
+              <div style={{ minWidth: 0 }}>
+                <h1 style={{ marginBottom: 2 }}>{person.DisplayName}</h1>
+                <div className="muted row" style={{ gap: "4px 14px" }}>
+                  <span>{person.Email}</span>
+                  {person.JobTitle && <span>{person.JobTitle}</span>}
+                  {person.Phone && <span>{person.Phone}</span>}
+                </div>
+              </div>
+              <button className="btn sm" onClick={() => setEditing(true)}>Edit profile</button>
+            </div>
+            <div className="row center" style={{ gap: 8, marginTop: 10 }}>
+              <span className="pill">{roleLabel(person, lookups)}</span>
+              <span className="pill">{person.DepartmentName || "No department"}</span>
+              <span className="pill" style={{ background: person.IsActive ? "#dcfce7" : "#e5e7eb" }}>{person.IsActive ? "Active" : "Off"}</span>
+            </div>
           </div>
-        </div>
+        )}
 
         <div className="card">
           <h2>What they hold</h2>
@@ -235,5 +258,83 @@ export default function Person() {
         </div>
       </aside>
     </div>
+  );
+}
+
+const PROFILE_FIELDS = [
+  ["firstName", "FirstName"],
+  ["lastName", "LastName"],
+  ["displayName", "SavedDisplayName"],
+  ["jobTitle", "JobTitle"],
+  ["phone", "Phone"],
+  ["email", "Email"]
+];
+
+// The Edit profile form at the top of the person page. Only changed fields
+// are sent, and every change shows up in Change history.
+function ProfileForm({ person, onCancel, onSaved }) {
+  const [form, setForm] = useState(() =>
+    Object.fromEntries(PROFILE_FIELDS.map(([key, column]) => [key, person[column] || ""]))
+  );
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const set = (key) => (e) => {
+    setForm({ ...form, [key]: e.target.value });
+    setError("");
+  };
+  const emailChanged = form.email.trim().toLowerCase() !== (person.Email || "").toLowerCase();
+
+  async function submit(e) {
+    e.preventDefault();
+    if (!form.firstName.trim()) return setError("First name is required.");
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(form.email.trim())) return setError("Enter a full email address, like name@example.org.");
+    const changes = {};
+    for (const [key, column] of PROFILE_FIELDS) {
+      if (form[key].trim() !== (person[column] || "")) changes[key] = form[key].trim();
+    }
+    if (!emailChanged) delete changes.email;
+    if (!Object.keys(changes).length) return onCancel();
+    setBusy(true);
+    try {
+      await api.updateUser(person.Id, changes);
+      await onSaved();
+    } catch (err) {
+      setError(err.message);
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form className="card form" onSubmit={submit} noValidate>
+      <h2 style={{ margin: 0 }}>Edit profile</h2>
+      <div className="row">
+        <label className="grow">First name<input id="profile-first" value={form.firstName} onChange={set("firstName")} maxLength={100} /></label>
+        <label className="grow">Last name<input id="profile-last" value={form.lastName} onChange={set("lastName")} maxLength={100} /></label>
+      </div>
+      <label>
+        Display name
+        <span className="muted small" style={{ fontWeight: 400 }}>Shown across the app. Leave blank to use first and last name.</span>
+        <input id="profile-display" value={form.displayName} onChange={set("displayName")} maxLength={200} />
+      </label>
+      <div className="row">
+        <label className="grow">Job title<input id="profile-title" value={form.jobTitle} onChange={set("jobTitle")} maxLength={150} /></label>
+        <label className="grow">Phone<input id="profile-phone" type="tel" value={form.phone} onChange={set("phone")} maxLength={50} /></label>
+      </div>
+      <label>
+        Email
+        <input id="profile-email" type="email" value={form.email} onChange={set("email")} maxLength={320} />
+      </label>
+      {emailChanged && (
+        <div className="flag">
+          This must match the address they sign in with. If it doesn&apos;t, their next sign-in creates a separate account and
+          emails they send won&apos;t reach this record.
+        </div>
+      )}
+      {error && <p className="error" style={{ margin: 0 }}>{error}</p>}
+      <div className="row">
+        <button className="btn pri" type="submit" disabled={busy}>{busy ? "Saving…" : "Save"}</button>
+        <button className="btn" type="button" onClick={onCancel} disabled={busy}>Cancel</button>
+      </div>
+    </form>
   );
 }

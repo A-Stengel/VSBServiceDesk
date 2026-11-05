@@ -158,8 +158,9 @@ makes a change if it hasn't been made yet, so running one twice is safe.
       event booking tables (`BookingStatuses`, `Rooms`, `EventBookings` and
       `BookingEvents`). See "Ticket types and event booking" below.
    8. `09_visual_overhaul.sql`, `10_delete_retired_ticket_types.sql`,
-      `11_one_ticket_bookings.sql` and `12_light_and_dark_mode.sql`.
-      Scripts 09, 10 and 11 have their own sections below.
+      `11_one_ticket_bookings.sql`, `12_light_and_dark_mode.sql`,
+      `13_email_and_automation.sql` and `14_person_profile_fields.sql`.
+      Scripts 09, 10, 11, 13 and 14 have their own sections below.
 4. Leave `06_grant_function_app.sql` for Step 3.
 
 If `03_users.sql` prints a WARNING about duplicate emails, remove the
@@ -442,6 +443,21 @@ func azure functionapp publish func-vsb-servicedesk --javascript --build remote
 ```
 
 The website updates on its own when the change is merged.
+
+### Person profile fields (script 14)
+
+Run `14_person_profile_fields.sql` once, **before** publishing the API (the
+same two commands as above). It adds the optional `JobTitle` and `Phone`
+columns to `dbo.Users`; the person page and People list read them, so
+publishing first makes those pages show an error until the script runs. It
+is safe to run twice.
+
+After that, technicians and admins can click **Edit profile** on a person's
+page to change their first name, last name, display name, job title, phone
+and email. Each change is added to the person's Change history. An email
+that another person already uses is refused. The app matches people by
+email when they sign in or send mail, so a changed email must match the
+address they sign in with.
 
 ### Email, automations and maintenance mode (script 13)
 
