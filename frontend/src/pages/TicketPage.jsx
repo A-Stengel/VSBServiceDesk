@@ -70,11 +70,12 @@ export default function TicketPage() {
           {data.cc.length > 0 && <p className="muted small">CC: {data.cc.join(", ")}</p>}
         </div>
 
-        {/* Onboarding, access change and off boarding work sits in the main
-            area, where the checklist and items have room */}
+        {/* The substance of the ticket sits in the main area: the new hire,
+            the checklist on access tickets, the event and room, and the equipment */}
         {accessWork && (ticket.NewHireFirstName || ticket.JobTitleName) && <NewHirePanel ticket={ticket} />}
         {accessWork && showChecklist && <ChecklistPanel ticket={ticket} checklist={data.checklist} onSaved={load} />}
-        {accessWork && showItems && <ItemsPanel ticket={ticket} items={data.items} onSaved={load} />}
+        {isBooking && <EventPanel ticket={ticket} access={access} editing={editing} onEdit={() => setEditing(true)} onSaved={load} />}
+        {showItems && <ItemsPanel ticket={ticket} items={data.items} onSaved={load} />}
 
         {ticket.MergedIntoId && (
           <p className="flag">
@@ -102,7 +103,6 @@ export default function TicketPage() {
       </div>
 
       <aside>
-        {isBooking && <EventPanel ticket={ticket} access={access} editing={editing} onEdit={() => setEditing(true)} onSaved={load} />}
         {/* A room-only request is HR's, so its IT status means nothing to the requester */}
         {isTech && data.survey?.AnsweredAt && (
           <div className="card">
@@ -118,7 +118,6 @@ export default function TicketPage() {
           : !hrView && !(ticket.HasRoom && !ticket.HasEquipment) && <RequesterPanel ticket={ticket} />}
         {!accessWork && (ticket.NewHireFirstName || ticket.JobTitleName) && <NewHirePanel ticket={ticket} />}
         {(ticket.AsksForInk || data.ink?.length > 0) && <InkPanel ticket={ticket} ink={data.ink || []} onSaved={load} />}
-        {!accessWork && showItems && <ItemsPanel ticket={ticket} items={data.items} onSaved={load} />}
         {data.events.length > 0 && (
           <div className="card">
             <h3>History</h3>
