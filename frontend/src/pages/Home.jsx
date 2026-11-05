@@ -48,8 +48,7 @@ export default function Home() {
 
   const goTo = (
     <div className="quick">
-      <Quick to="/tickets" icon="ticket" title="My tickets" desc="Requests you made" />
-      {roles.technician && <Quick to="/tickets?tab=all" icon="list" title="All tickets" desc="The shared IT queue" />}
+      <Quick to="/tickets" icon="ticket" title="Tickets" desc={roles.technician ? "Your tabs for your requests and the IT queue" : "Requests you made or are on"} />
       {roles.worker && (
         <Quick to="/events" icon="calendar" title={eventsName}
           desc={roles.eventManagerOnly ? "Confirm or decline room requests" : "Rooms and equipment, one record each"} />

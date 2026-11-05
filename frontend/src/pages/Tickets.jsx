@@ -63,12 +63,11 @@ export default function Tickets() {
   }, [data, fetchKey, departments, me]);
 
   const rows = list.apply(tagged);
-  const title = base.scope === "queue" ? "Tickets" : "My tickets";
 
   return (
     <>
       <div className="head-row">
-        <h1>{title}</h1>
+        <h1>Tickets</h1>
         <div className="row center">
           {rows && <span className="muted small">{rows.length} ticket{rows.length === 1 ? "" : "s"}</span>}
           {held > 0 && <Link className="btn sm" to="/held-mail">{held} held email{held === 1 ? "" : "s"}</Link>}
