@@ -503,7 +503,7 @@ script runs. It is safe to run twice. In plain terms it:
   it's read only or edit. Every license you have now gets a Software entry
   with the same name, linked to it, so nothing is lost; rename or merge
   them in Settings afterwards.
-- Adds the **iMIS lists** (modules, roles and security groups), filled in
+- Adds the **iMIS permissions** (modules, roles and security groups), filled in
   with the ones from the iMIS screens.
 - Adds **job titles** under each department, and the **onboarding
   defaults** for each title plus a general set. The equipment and licenses
@@ -518,15 +518,17 @@ script runs. It is safe to run twice. In plain terms it:
 
 After publishing:
 
-1. Settings, **Software**: check the names and descriptions. On the
-   Inventory page, Licenses tab, set "Software it's for" on each license,
-   and read only or edit on the iMIS ones.
-2. Settings, **iMIS lists**: check the modules, roles and groups.
+1. Settings, **Software**: check each software's name, description and
+   order on the form, link its licenses (the first one is the default),
+   and on the iMIS card set read only or edit on each license and check
+   the modules, roles and security groups. Seats and costs stay on the
+   Inventory page.
+2. Settings, **Departments and job titles**: add each department's job
+   titles. A new title starts with the general onboarding defaults.
 3. Inventory, **Printers** and **Ink and toner**: add the printers, then
    the cartridges and which printers they work with.
-4. Settings, **Onboarding defaults**: set the general defaults, then pick a
-   department and add its job titles and what each gets. Tick Required on
-   anything the form must always include.
+4. Settings, **Onboarding defaults**: set the general defaults, then each
+   job title's. Tick Required on anything the form must always include.
 
 On the Onboarding form, picking a job title fills in its defaults; required
 items can't be taken off. A title typed with "Something else" is added to
