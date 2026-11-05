@@ -130,7 +130,7 @@ flowchart LR
 - **Blob Storage.** Holds attachments in a private container. Files are only
   downloaded through the API, after it checks that the person may see the
   ticket.
-- **Microsoft Graph.** The Function App's managed identity gets Mail.Read and
+- **Microsoft Graph.** The Function App's managed identity gets Mail.ReadWrite and
   Mail.Send. Exchange RBAC for Applications limits both to
   `servicedesk@vsb.org`, so it cannot touch any other mailbox. It also needs
   write access to the VSB Events group calendar (see Event booking).
@@ -672,7 +672,7 @@ exact commands for each step.
    system-assigned managed identity.
 4. Give that identity access: a contained SQL user with read and write roles,
    Storage Blob Data Contributor on the storage account, and mail access.
-5. Give the mail access with Exchange RBAC for Applications (Mail.Read,
+5. Give the mail access with Exchange RBAC for Applications (Mail.ReadWrite,
    Mail.Send and Calendars.ReadWrite), scoped to `servicedesk@vsb.org`,
    `sdtest@vsb.org` and the events calendar, using Exchange Online PowerShell.
 6. Create an Entra app registration for sign-in, single tenant, with the Static

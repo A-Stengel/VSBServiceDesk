@@ -1,6 +1,6 @@
 // Microsoft Graph, signed in as the Function App's managed identity (on your
 // machine, whoever is signed in to the Azure CLI). It needs the application
-// permissions Mail.Read, Mail.Send and Calendars.ReadWrite, limited to the
+// permissions Mail.ReadWrite, Mail.Send and Calendars.ReadWrite, limited to the
 // desk's mailboxes with an Exchange "RBAC for Applications" scope (README).
 const { DefaultAzureCredential } = require("@azure/identity");
 
