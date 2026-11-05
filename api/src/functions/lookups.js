@@ -4,6 +4,7 @@ const { getConnection, withTransaction, sql } = require("../shared/db");
 const { LOOKUPS, FIELD_KEYS, orderBy, columnList } = require("../shared/lookups");
 const { getSettings } = require("../shared/settings");
 const { logChange } = require("../shared/changelog");
+const { copyGeneralTo } = require("../shared/onboarding");
 
 // Everything the forms need in one call: the active rows of every lookup, which
 // fields each ticket type (and category) shows, the status/priority ids the
@@ -207,6 +208,8 @@ endpoint(
         `);
         const name = values.find((v) => v.column.name === "Name")?.value;
         const day = values.find((v) => v.column.name === "HolidayDate")?.value;
+        // A new job title starts from the general onboarding defaults
+        if (request.params.table === "jobTitles") await copyGeneralTo(tx, result.recordset[0].Id);
         await logChange(tx, { area: "settings", section: request.params.table, actorId: user.Id, summary: `Added ${[name, day].filter(Boolean).join(", ")}` });
         return result.recordset[0].Id;
       });

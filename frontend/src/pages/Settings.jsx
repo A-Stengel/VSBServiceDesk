@@ -35,7 +35,7 @@ const SECTIONS = [
   { key: "equipmentStatuses", label: "Equipment statuses", table: "equipmentStatuses" },
   { group: "Organization" },
   { key: "organization", label: "Name, time zone and mailbox", history: "organization" },
-  { key: "departments", label: "Departments", table: "departments" },
+  { key: "departments", label: "Departments and job titles", history: "departments,jobTitles" },
   { key: "holidays", label: "Holidays", table: "holidays" },
   { group: "Email" },
   { key: "incoming", label: "Incoming", history: "incoming" },
@@ -46,8 +46,7 @@ const SECTIONS = [
   { key: "templates", label: "Email templates", history: "templates" },
   { group: "Inventory and team" },
   { key: "onboarding", label: "Onboarding defaults", history: "onboarding,jobTitles" },
-  { key: "applications", label: "Software", table: "applications" },
-  { key: "imis", label: "iMIS lists", history: "imisModules,imisRoles,imisGroups" },
+  { key: "applications", label: "Software", history: "applications,software,imisModules,imisRoles,imisGroups" },
   { key: "defaultTabs", label: "Default tabs", history: "defaultTabs" },
   { group: "System" },
   { key: "access", label: "Access and maintenance", history: "access" },
@@ -69,7 +68,7 @@ const DESCRIPTIONS = {
   rooms: "Rooms people can book. Turned off rooms stay on old bookings.",
   bookingStatuses: "The room part of a rental or event. \"Room is in use\" keeps it in the overlap check.",
   equipmentStatuses: "The names shown for the equipment part. The app works out the stage from the items, so these can be renamed but not added.",
-  departments: "Where staff work. Each person has one department; managers can look after several.",
+  departments: "Where staff work, and each department's job titles. Each person has one department; managers can look after several. A new job title starts with the general onboarding defaults.",
   holidays: "Skipped when counting business days for the warning and automatic close.",
   roles: "What someone can do comes from the Technician, Admin and Event manager ticks.",
   userTypes: "Staff sign in; outside people and shared mailboxes only email in.",
@@ -82,8 +81,7 @@ const DESCRIPTIONS = {
   access: "Who can use the web app. Email keeps working either way.",
   appearance: "The colors for light mode and dark mode. Everyone picks Light, Dark or Match device from the menu under their name.",
   onboarding: "What each job title gets when someone is onboarded. The Onboarding form fills these in when the title is picked; required equipment and software can't be taken off there. Licenses and iMIS access are only shown to IT.",
-  applications: "The software people pick on the Onboarding form, in plain terms. Each license on the Inventory page says which of these it's for, so IT knows the exact license to give.",
-  imis: "The iMIS modules, roles and security groups IT can give. Each module gets its own level (0 to 8) in the onboarding defaults and on the ticket.",
+  applications: "Each software is one choice on the Onboarding form. Set how it shows on the form, which licenses it uses (IT picks the exact one on the ticket) and, for iMIS, the modules, roles and security groups. Seat counts and costs are on the Inventory page.",
   logo: "Shown in the header, on the loading screen and in the browser tab. A square PNG with a transparent background looks best."
 };
 
@@ -167,15 +165,9 @@ function Section({ section, onChange }) {
     case "onboarding":
       return <OnboardingDefaultsEditor onChange={onChange} />;
     case "applications":
-      return <Applications onChange={onChange} />;
-    case "imis":
-      return (
-        <div className="stack">
-          <LookupList table="imisModules" title="Modules" onChange={onChange} />
-          <LookupList table="imisRoles" title="Roles" onChange={onChange} />
-          <LookupList table="imisGroups" title="Security groups" onChange={onChange} />
-        </div>
-      );
+      return <SoftwareSettings onChange={onChange} />;
+    case "departments":
+      return <Departments onChange={onChange} />;
     case "organization":
       return <SettingsForm keys={ORGANIZATION_KEYS} onChange={onChange} notes={ORGANIZATION_NOTES} />;
     case "defaultTabs":
@@ -917,27 +909,205 @@ function Guidelines({ onChange }) {
   );
 }
 
-// The friendly software names, and which licenses are linked to each
-function Applications({ onChange }) {
+// Departments, and the job titles under the one picked
+function Departments({ onChange }) {
   const { lookups } = useApp();
-  const unlinked = lookups.software.filter((s) => !s.ApplicationId);
+  const [departmentId, setDepartmentId] = useState("");
   return (
     <div className="stack">
-      <LookupList table="applications" onChange={onChange} />
-      <div>
-        <h3>Linked licenses</h3>
-        <ul className="history">
-          {(lookups.applications || []).map((a) => {
-            const linked = lookups.software.filter((s) => s.ApplicationId === a.Id);
-            return (
-              <li key={a.Id}>
-                <strong>{a.Name}</strong>: {linked.length ? linked.map((l) => l.Name).join(", ") : <span className="warn">no licenses linked</span>}
-              </li>
-            );
-          })}
-          {unlinked.length > 0 && <li className="muted">Not linked to any software: {unlinked.map((l) => l.Name).join(", ")}</li>}
-        </ul>
-        <p className="muted small" style={{ marginBottom: 0 }}>Link a license on the Inventory page, Licenses tab.</p>
+      <LookupList table="departments" onChange={onChange} />
+      <div className="stack">
+        <h3 style={{ margin: 0 }}>Job titles</h3>
+        <label className="field">
+          Department
+          <select value={departmentId} onChange={(e) => setDepartmentId(e.target.value)}>
+            <option value="">Choose a department</option>
+            {lookups.departments.map((d) => <option key={d.Id} value={d.Id}>{d.Name}</option>)}
+          </select>
+        </label>
+        {departmentId && (
+          <LookupList key={departmentId} table="jobTitles" fixed={{ DepartmentId: Number(departmentId) }}
+            filter={(r) => r.DepartmentId === Number(departmentId)} hide={["DepartmentId"]} onChange={onChange} />
+        )}
+        <p className="muted small" style={{ margin: 0 }}>What each title gets is set in Onboarding defaults. Turned off titles stay on old tickets but aren&apos;t offered on the form.</p>
+      </div>
+    </div>
+  );
+}
+
+// One card per software: how it shows on the Onboarding form, the licenses
+// it uses, and for iMIS the modules, roles and security groups IT can give.
+// Seats and costs stay on the Inventory page.
+function SoftwareSettings({ onChange }) {
+  const { lookups, reloadLookups, notify } = useApp();
+  const [rows, setRows] = useState(null);
+  const [open, setOpen] = useState(null);
+  const [draft, setDraft] = useState(null);
+  const [linking, setLinking] = useState("");
+  const [imisTab, setImisTab] = useState("imisModules");
+  const [newName, setNewName] = useState("");
+
+  const load = useCallback(() => api.adminLookup("applications").then((d) => setRows(d.rows)).catch((e) => notify(e.message, true)), [notify]);
+  useEffect(() => { load(); }, [load]);
+
+  async function run(promise, message) {
+    try {
+      await promise;
+      if (message) notify(message);
+      await Promise.all([load(), reloadLookups()]);
+      onChange();
+      return true;
+    } catch (err) {
+      notify(err.message, true);
+      return false;
+    }
+  }
+  if (!rows) return <p className="muted">Loading…</p>;
+
+  const toggleOpen = (a) => {
+    setOpen(open === a.Id ? null : a.Id);
+    setDraft({ Name: a.Name, Description: a.Description || "" });
+    setLinking("");
+  };
+  async function move(index, step) {
+    const order = [...rows];
+    const [row] = order.splice(index, 1);
+    order.splice(index + step, 0, row);
+    const updates = order.map((r, i) => ({ r, sort: (i + 1) * 10 })).filter(({ r, sort }) => r.SortOrder !== sort);
+    await run(Promise.all(updates.map(({ r, sort }) => api.adminUpdateLookup("applications", r.Id, { SortOrder: sort }, r.Id !== row.Id))));
+  }
+  async function addSoftware(e) {
+    e.preventDefault();
+    const name = newName.trim();
+    const sortOrder = Math.max(0, ...rows.map((r) => r.SortOrder || 0)) + 10;
+    if (await run(api.adminCreateLookup("applications", { Name: name, SortOrder: sortOrder }), `Added ${name}.`)) setNewName("");
+  }
+  // Licenses in the order IT picks from; the first is used when the
+  // defaults don't name one
+  const licensesOf = (id) => lookups.software.filter((l) => l.ApplicationId === id);
+  const unlinked = lookups.software.filter((l) => !l.ApplicationId);
+  async function makeFirst(license, linked) {
+    const lowest = Math.min(...linked.map((l) => l.SortOrder || 0));
+    await run(api.adminUpdateLookup("software", license.Id, { SortOrder: lowest - 10 }), `${license.Name} is now the first choice.`);
+  }
+  const imisLists = [["imisModules", "Modules"], ["imisRoles", "Roles"], ["imisGroups", "Security groups"]];
+
+  return (
+    <div className="stack">
+      <div className="list-rows">
+        {rows.map((a, i) => {
+          const linked = licensesOf(a.Id);
+          const isOpen = open === a.Id;
+          return (
+            <div key={a.Id} className="card" style={{ padding: 0 }}>
+              <div className={`lr ${a.IsActive ? "" : "off"}`} style={{ padding: "10px 12px" }}>
+                <span className="name">
+                  <strong>{a.Name}</strong>
+                  <span className="muted small"> · {a.Description || "no description"} · {linked.length} license{linked.length === 1 ? "" : "s"}</span>
+                  <span className="pill" style={{ marginLeft: 6 }}>{a.IsActive ? "On the form" : "Hidden"}</span>
+                  {a.IsImis && <span className="pill" style={{ marginLeft: 6 }}>iMIS</span>}
+                </span>
+                <button className="btn sm" aria-label={`Move ${a.Name} up`} disabled={i === 0} onClick={() => move(i, -1)}>▲</button>
+                <button className="btn sm" aria-label={`Move ${a.Name} down`} disabled={i === rows.length - 1} onClick={() => move(i, 1)}>▼</button>
+                <button className="btn sm" aria-expanded={isOpen} onClick={() => toggleOpen(a)}>{isOpen ? "Close" : "Edit"}</button>
+              </div>
+              {isOpen && (
+                <div className="stack" style={{ padding: "0 12px 12px" }}>
+                  <fieldset>
+                    <legend>On the form</legend>
+                    <form className="row" onSubmit={(e) => {
+                      e.preventDefault();
+                      run(api.adminUpdateLookup("applications", a.Id, draft), "Saved.");
+                    }}>
+                      <label className="grow">Name<input value={draft.Name} maxLength={100} required onChange={(e) => setDraft({ ...draft, Name: e.target.value })} /></label>
+                      <label className="grow">Description<input value={draft.Description} maxLength={200} onChange={(e) => setDraft({ ...draft, Description: e.target.value })} /></label>
+                      <button className="btn sm pri" disabled={draft.Name === a.Name && draft.Description === (a.Description || "")}>Save</button>
+                    </form>
+                    <label className="check">
+                      <input type="checkbox" checked={!!a.IsActive}
+                        onChange={(e) => run(api.adminUpdateLookup("applications", a.Id, { IsActive: e.target.checked }), e.target.checked ? `${a.Name} is on the form.` : `${a.Name} is hidden from the form.`)} />
+                      Show on the Onboarding form
+                    </label>
+                    <label className="check">
+                      <input type="checkbox" checked={!!a.IsImis}
+                        onChange={(e) => run(api.adminUpdateLookup("applications", a.Id, { IsImis: e.target.checked }), "Saved.")} />
+                      This is iMIS (IT sets module levels, roles and groups)
+                    </label>
+                  </fieldset>
+
+                  <fieldset>
+                    <legend>Licenses</legend>
+                    <p className="muted small" style={{ margin: 0 }}>IT picks one of these on the ticket. The first is used when the onboarding defaults don&apos;t name one.</p>
+                    {!linked.length && <p className="warn small" style={{ margin: 0 }}>No licenses linked. Technicians will have to pick one by hand.</p>}
+                    <div className="stack-list">
+                      {linked.map((l, j) => (
+                        <div key={l.Id} className="stack-row">
+                          <span className="grow">
+                            <strong>{l.Name}</strong>
+                            <span className="muted small"> · {l.SeatsPurchased ?? 0} seats owned · seats and cost on Inventory</span>
+                          </span>
+                          {a.IsImis && (
+                            <select aria-label={`${l.Name} iMIS access`} value={l.ImisAccess || ""}
+                              onChange={(e) => run(api.adminUpdateLookup("software", l.Id, { ImisAccess: e.target.value || null }), "Saved.")}>
+                              <option value="">iMIS access: not set</option>
+                              <option value="read">Read only (StaffReadOnly role)</option>
+                              <option value="edit">Edit (module levels)</option>
+                            </select>
+                          )}
+                          {j === 0 ? <span className="pill">First choice</span>
+                            : <button type="button" className="link small" onClick={() => makeFirst(l, linked)}>Make first</button>}
+                          <button type="button" className="link small" onClick={() => run(api.adminUpdateLookup("software", l.Id, { ApplicationId: null }), `Unlinked ${l.Name}.`)}>Unlink</button>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="row">
+                      <select value={linking} onChange={(e) => setLinking(e.target.value)} aria-label="Link a license">
+                        <option value="">{unlinked.length ? "Link a license" : "Every license is linked"}</option>
+                        {unlinked.map((l) => <option key={l.Id} value={l.Id}>{l.Name}</option>)}
+                      </select>
+                      <button type="button" className="btn sm" disabled={!linking}
+                        onClick={() => run(api.adminUpdateLookup("software", Number(linking), { ApplicationId: a.Id }), "License linked.").then(() => setLinking(""))}>Link</button>
+                    </div>
+                    <p className="muted small" style={{ margin: 0 }}>Add licenses, seats and costs on the Inventory page, Licenses tab.</p>
+                  </fieldset>
+
+                  {a.IsImis ? (
+                    <fieldset>
+                      <legend>iMIS permissions</legend>
+                      <p className="muted small" style={{ margin: 0 }}>What IT can give. Each module gets its own level (0 to 8) in the onboarding defaults and on the ticket.</p>
+                      <div className="tabs" role="tablist" style={{ margin: "4px 0" }}>
+                        {imisLists.map(([table, label]) => (
+                          <button key={table} type="button" role="tab" aria-selected={imisTab === table} className={`tab ${imisTab === table ? "on" : ""}`}
+                            onClick={() => setImisTab(table)}>{label}</button>
+                        ))}
+                      </div>
+                      <LookupList key={imisTab} table={imisTab} onChange={onChange} />
+                    </fieldset>
+                  ) : (
+                    <p className="muted small" style={{ margin: 0 }}>Only iMIS has permission lists for now.</p>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      <form className="row" onSubmit={addSoftware}>
+        <label className="grow">New software<input value={newName} maxLength={100} onChange={(e) => setNewName(e.target.value)} placeholder="Like DocuSign" /></label>
+        <button className="btn sm" disabled={!newName.trim()}>Add software</button>
+      </form>
+      {unlinked.length > 0 && <p className="muted small" style={{ margin: 0 }}>Not linked to any software yet: {unlinked.map((l) => l.Name).join(", ")}.</p>}
+      <div className="stack">
+        <h3 style={{ margin: 0 }}>On the Onboarding form</h3>
+        <p className="muted small" style={{ margin: 0 }}>What managers see under &quot;Software they need&quot;. License names and iMIS details never show there.</p>
+        <div className="app-cards">
+          {rows.filter((a) => a.IsActive).map((a) => (
+            <div key={a.Id} className="app-card">
+              <input type="checkbox" disabled aria-label={a.Name} />
+              <span><strong>{a.Name}</strong>{a.Description && <span className="muted small">{a.Description}</span>}</span>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );

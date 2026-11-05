@@ -216,14 +216,13 @@ function Equipment({ rows, run }) {
 }
 
 function Licenses({ rows, run }) {
-  const { lookups } = useApp();
   const update = (row, data, message) => run(api.updateInventory("licenses", row.Id, data), message);
   return (
     <div className="card flush">
       <div className="scroll">
         <table className="tbl" style={{ minWidth: 1000 }}>
           <thead>
-            <tr><th>License</th><th>Software it&apos;s for</th><th className="num">Seats used</th><th>Seats owned</th><th>Cost per seat</th><th className="num">Monthly cost</th><th /></tr>
+            <tr><th>License</th><th title="Linked in Settings, Software">Software it&apos;s for</th><th className="num">Seats used</th><th>Seats owned</th><th>Cost per seat</th><th className="num">Monthly cost</th><th /></tr>
           </thead>
           <tbody>
             {!rows.length && <tr><td colSpan={7} className="muted">No licenses yet. Add the first one below.</td></tr>}
@@ -234,19 +233,8 @@ function Licenses({ rows, run }) {
                   {!r.IsActive && <div className="muted small">Turned off</div>}
                 </td>
                 <td>
-                  <select value={r.ApplicationId || ""} aria-label={`${r.Name} is for`} style={{ width: "auto", minHeight: 32, padding: "4px 8px" }}
-                    onChange={(e) => update(r, { applicationId: Number(e.target.value) || null }, `${r.Name}: software updated.`)}>
-                    <option value="">Not linked</option>
-                    {(lookups.applications || []).map((a) => <option key={a.Id} value={a.Id}>{a.Name}</option>)}
-                  </select>
-                  {r.IsImis && (
-                    <select value={r.ImisAccess || ""} aria-label={`${r.Name} iMIS access`} style={{ width: "auto", minHeight: 32, padding: "4px 8px", marginTop: 4, display: "block" }}
-                      onChange={(e) => update(r, { imisAccess: e.target.value || null }, `${r.Name}: iMIS access updated.`)}>
-                      <option value="">iMIS access: not set</option>
-                      <option value="read">iMIS: read only</option>
-                      <option value="edit">iMIS: edit (staff access levels)</option>
-                    </select>
-                  )}
+                  {r.ApplicationName || <span className="muted small">Not linked</span>}
+                  {r.IsImis && r.ImisAccess && <div className="muted small">iMIS {r.ImisAccess === "read" ? "read only" : "edit"}</div>}
                 </td>
                 <td className="num" style={r.SeatsUsed > r.SeatsPurchased ? { color: "var(--error)", fontWeight: 600 } : undefined}>{r.SeatsUsed}</td>
                 <td><Stepper value={r.SeatsPurchased} min={r.SeatsUsed} label={`${r.Name} seats owned`} onSave={(n) => update(r, { count: n }, `${r.Name}: ${n} seats owned.`)} /></td>

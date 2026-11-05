@@ -205,7 +205,7 @@ export default function OnboardingDefaultsEditor({ onChange }) {
                 );
               })}
             </div>
-            <p className="muted small" style={{ margin: 0 }}>Link licenses to software on the Inventory page (Licenses, Software it&apos;s for).</p>
+            <p className="muted small" style={{ margin: 0 }}>Link licenses to software in Settings, Software.</p>
           </fieldset>
 
           {(imisApp || imisCount > 0) && (
@@ -217,7 +217,7 @@ export default function OnboardingDefaultsEditor({ onChange }) {
               )}
               <div className="field">
                 <span>Module levels</span>
-                {!(lookups.imisModules || []).length && <p className="muted small" style={{ margin: 0 }}>Add modules in Settings, iMIS lists.</p>}
+                {!(lookups.imisModules || []).length && <p className="muted small" style={{ margin: 0 }}>Add modules in Settings, Software (the iMIS card).</p>}
                 <div className="stack-list">
                   {(lookups.imisModules || []).map((m) => (
                     <div key={m.Id} className="stack-row">
