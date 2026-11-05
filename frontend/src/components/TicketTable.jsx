@@ -29,6 +29,7 @@ export default function TicketTable({ tickets, list, technician }) {
               <td><Link to={`/tickets/${t.Id}`}>{t.Number}</Link></td>
               <td>
                 <Link to={`/tickets/${t.Id}`} className="link">{t.Subject}</Link>
+                {t.DepartmentTag && <> <span className="pill dept-pill">{t.DepartmentTag}</span></>}
                 {(t.CategoryName || t.ForUserName || t.ForPersonName) && (
                   <div className="muted small">{[t.CategoryName, t.SubcategoryName, t.ForUserName || t.ForPersonName].filter(Boolean).join(" · ")}</div>
                 )}

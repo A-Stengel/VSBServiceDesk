@@ -21,7 +21,7 @@ endpoint(
     const intoId = requiredId((await readJson(request)).intoId, "Ticket to merge into");
     if (fromId === intoId) throw new HttpError(400, "Pick a different ticket to merge into");
     const settings = await getSettings();
-    if (!settings.ClosedStatusId) throw new HttpError(500, "Set the status for Move to Closure in Settings");
+    if (!settings.ClosedStatusId) throw new HttpError(500, "Set the status for Close ticket in Settings");
 
     await withTransaction(async (tx) => {
       const from = await loadTicket(tx, fromId);

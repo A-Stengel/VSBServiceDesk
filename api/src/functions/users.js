@@ -15,6 +15,7 @@ const { getSettings } = require("../shared/settings");
 const { getHoldings } = require("../shared/holdings");
 const { readItems, addTicketItem, assertSeats } = require("../shared/inventory");
 const { logChange, listChanges } = require("../shared/changelog");
+const { resetTabs } = require("../shared/tabs");
 const { TICKET_SELECT, withNumber, recordEvents } = require("../shared/tickets");
 
 const PEOPLE_SELECT = `
@@ -303,6 +304,11 @@ endpoint(
           before.ManagedDepartmentIds.every((d) => after.ManagedDepartmentIds.includes(d));
         if (!sameManaged) notes.push(`Manager of: ${await names(after.ManagedDepartmentIds)}`);
         for (const summary of notes) await logChange(tx, { area: "person", entityId: id, actorId: me.Id, summary });
+        // Moving to or from Technician (or Event Manager) gives them that
+        // group's default tabs the next time they open each list.
+        if (!!before.IsTechnician !== !!after.IsTechnician || !!before.IsEventManager !== !!after.IsEventManager) {
+          await resetTabs(tx, id);
+        }
       });
     } catch (error) {
       if (isForeignKeyViolation(error)) throw new HttpError(400, "That role, department or user type doesn't exist");

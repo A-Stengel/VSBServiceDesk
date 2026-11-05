@@ -18,6 +18,8 @@ const TICKET_SELECT = `
          t.SourceId, so.Name AS SourceName,
          t.RequesterId, ${personName("r")} AS RequesterName, r.Email AS RequesterEmail,
          t.ForUserId, CASE WHEN fu.Id IS NOT NULL THEN ${personName("fu")} END AS ForUserName,
+         r.DepartmentId AS RequesterDepartmentId, fu.DepartmentId AS ForUserDepartmentId,
+         (SELECT STRING_AGG(xc.Email, ',') FROM dbo.TicketCc xc WHERE xc.TicketId = t.Id) AS CcEmails,
          t.ForPersonName, t.ForDepartmentId, fd.Name AS ForDepartmentName,
          t.TechnicianId, CASE WHEN te.Id IS NOT NULL THEN ${personName("te")} END AS TechnicianName,
          t.DepartmentId, d.Name AS DepartmentName,
@@ -46,6 +48,21 @@ const TICKET_SELECT = `
   LEFT JOIN dbo.Users cb ON cb.Id = tr.ConfirmedById
 `;
 
+// Tickets someone is on: they asked for it, it's for them, or they're CC'd.
+// Needs @Me (their user id) and @MyEmail.
+const MINE_SQL = `(t.RequesterId = @Me OR t.ForUserId = @Me
+  OR EXISTS (SELECT 1 FROM dbo.TicketCc mc WHERE mc.TicketId = t.Id AND mc.Email = @MyEmail))`;
+
+// Tickets of people in the departments a manager manages: the requester, the
+// person it's for, or a new hire's department. Ids are numbers from the
+// signed-in user, never from the request.
+function departmentSql(ids) {
+  const list = (ids || []).map(Number).filter(Number.isInteger);
+  if (!list.length) return "1 = 0";
+  const inList = list.join(",");
+  return `(r.DepartmentId IN (${inList}) OR fu.DepartmentId IN (${inList}) OR t.ForDepartmentId IN (${inList}))`;
+}
+
 // A ticket with a room and no equipment is HR's alone: technicians' lists
 // and counts leave it out (they can still open it).
 const FOR_IT_SQL = `(NOT EXISTS (SELECT 1 FROM dbo.TicketRooms xr WHERE xr.TicketId = t.Id)
@@ -65,12 +82,26 @@ function withNumber(ticket) {
   return { ...ticket, Number: formatNumber(ticket.Id), StartAt: toWall(ticket.StartAt), EndAt: toWall(ticket.EndAt) };
 }
 
-// What someone may see on a ticket. Technicians see everything. The
-// requester (or the person it's for) sees their own ticket without notes.
-// Event Managers (HR) see tickets with a room, but only the room part: no
-// equipment, no technician notes, and no status, priority or technician.
+// Is this person on the ticket: the requester, the person it's for, or CC'd.
+function isOnTicket(user, ticket) {
+  if (ticket.RequesterId === user.Id || ticket.ForUserId === user.Id) return true;
+  const email = String(user.Email || "").toLowerCase();
+  return !!email && String(ticket.CcEmails || "").toLowerCase().split(",").includes(email);
+}
+
+// Is the ticket from someone in a department this person manages.
+function isDepartmentTicket(user, ticket) {
+  const ids = user.ManagedDepartmentIds || [];
+  return [ticket.RequesterDepartmentId, ticket.ForUserDepartmentId, ticket.ForDepartmentId].some((d) => d && ids.includes(d));
+}
+
+// What someone may see on a ticket. Technicians see everything. Anyone on
+// the ticket (requester, the person it's for, or CC'd) and the managers of
+// their department see it without notes, and can reply. Event Managers (HR)
+// see tickets with a room, but only the room part: no equipment, no
+// technician notes, and no status, priority or technician.
 function accessOf(user, ticket) {
-  const own = ticket.RequesterId === user.Id || ticket.ForUserId === user.Id;
+  const own = isOnTicket(user, ticket) || isDepartmentTicket(user, ticket);
   const hr = !!user.IsEventManager && !!ticket.HasRoom;
   return {
     see: !!user.IsTechnician || own || hr,
@@ -197,6 +228,10 @@ async function recordEvents(db, ticketId, actorId, changes) {
 module.exports = {
   TICKET_SELECT,
   FOR_IT_SQL,
+  MINE_SQL,
+  departmentSql,
+  isOnTicket,
+  isDepartmentTicket,
   ROOM_FIELDS,
   accessOf,
   forViewer,

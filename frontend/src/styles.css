@@ -11,6 +11,10 @@
   --acc-soft: #f2f7fc;
   --head: #0f3a40;
   --note: #fff8db;
+  --resolution: #e6f4ea;
+  --resolution-line: #9fd0ae;
+  --dept-bg: #f1ecfa;
+  --dept-text: #4b2e83;
   --out: #eef5fc;
   --warn: #a8490a;
   --error: #b42318;
@@ -48,6 +52,10 @@
    these are the ones that stay fixed. */
 :root[data-mode="dark"] {
   --note: #3a3218;
+  --resolution: #16301f;
+  --resolution-line: #2f6a45;
+  --dept-bg: #2a2238;
+  --dept-text: #c9b5f0;
   --out: #1a2a38;
   --warn: #f0a868;
   --error: #f4998f;
@@ -215,6 +223,18 @@ legend { font-weight: 600; padding: 0 4px; font-size: 14px; }
 .toolbar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
 .toolbar input[type="search"] { flex: 1 1 260px; width: auto; }
 .filter-panel { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; padding: 14px; margin-bottom: 12px; }
+.tab-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--warn); margin-left: 6px; vertical-align: middle; }
+.tab.tab-edit { color: var(--acc); font-weight: 600; }
+.tab-editor, .filter-box { margin-bottom: 12px; }
+.tab-rows { display: flex; flex-direction: column; gap: 8px; }
+.tab-block { display: flex; flex-direction: column; gap: 8px; }
+.tab-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+.tab-row input { flex: 1 1 180px; width: auto; font-weight: 600; }
+.tab-row .grow { min-width: 0; flex: 2 1 220px; }
+.save-bar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; border-top: 1px solid var(--line-soft); padding-top: 12px; }
+.save-bar input { flex: 1 1 200px; width: auto; }
+.dept-switch { background: var(--dept-bg); color: var(--dept-text); border-radius: 999px; padding: 6px 12px; font-weight: 600; font-size: 13px; }
+.pill.dept-pill { background: var(--dept-bg); color: var(--dept-text); }
 .save-view { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; padding: 14px; margin-bottom: 12px; }
 .save-view input[type="text"] { flex: 1 1 220px; width: auto; }
 .scroll { overflow-x: auto; }
@@ -246,6 +266,7 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 14px; }
 .split > div > * + * { margin-top: 16px; }
 .message.out { background: var(--out); }
 .message.note, form.note { background: var(--note); }
+.message.resolution, form.resolution { background: var(--resolution); border-color: var(--resolution-line); }
 .message .meta { font-size: 13px; color: var(--muted); margin-bottom: 6px; }
 .files { margin: 8px 0 0; padding-left: 18px; }
 .facts { margin: 0; }

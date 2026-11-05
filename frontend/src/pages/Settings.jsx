@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api, formatDate, timeAgo } from "../api.js";
 import { useApp } from "../App.jsx";
 import Logo, { logoChanged } from "../components/Logo.jsx";
 import RichEditor from "../components/RichEditor.jsx";
 import { HeldMailList } from "./HeldMail.jsx";
+import { FilterFields } from "../components/ListView.jsx";
+import { describeSettings, eventList, normalizeSettings, peopleList, rolesForAudience, ticketList } from "../lists.js";
 import { plainToRich } from "../richtext.js";
 import { organization } from "../organization.js";
 import {
@@ -43,7 +45,7 @@ const SECTIONS = [
   { key: "templates", label: "Email templates", history: "templates" },
   { group: "Inventory and team" },
   { key: "onboarding", label: "Onboarding defaults", history: "inventoryItems,software" },
-  { key: "sharedViews", label: "Shared views" },
+  { key: "defaultTabs", label: "Default tabs", history: "defaultTabs" },
   { group: "System" },
   { key: "access", label: "Access and maintenance", history: "access" },
   { key: "appearance", label: "Appearance", history: "appearance" },
@@ -160,8 +162,8 @@ function Section({ section, onChange }) {
       return <OnboardingDefaults onChange={onChange} />;
     case "organization":
       return <SettingsForm keys={ORGANIZATION_KEYS} onChange={onChange} notes={ORGANIZATION_NOTES} />;
-    case "sharedViews":
-      return <SharedViews />;
+    case "defaultTabs":
+      return <DefaultTabs onChange={onChange} />;
     case "appearance":
       return <AppearanceSettings onChange={onChange} />;
     case "logo":
@@ -943,38 +945,124 @@ function OnboardingDefaults({ onChange }) {
   );
 }
 
-function SharedViews() {
-  const { notify } = useApp();
-  const [views, setViews] = useState(null);
-  const load = useCallback(() => api.sharedViews().then(setViews).catch((e) => notify(e.message, true)), [notify]);
+const TAB_LISTS = [
+  { key: "tickets", label: "Tickets", audiences: ["requester", "technician"] },
+  { key: "events", label: "Rentals and events", audiences: ["requester", "eventManager", "technician"] },
+  { key: "people", label: "People", audiences: ["technician"] }
+];
+const AUDIENCE_LABELS = { requester: "Requesters", eventManager: "Event managers", technician: "Technicians" };
+
+// The tabs each group starts with on each list. New accounts get a copy;
+// people who already have tabs keep theirs until they click Reset to
+// defaults. Someone whose role changes to or from Technician (or Event
+// Manager) gets their new group's tabs.
+function DefaultTabs({ onChange }) {
+  const { me, lookups, notify } = useApp();
+  const [listKey, setListKey] = useState("tickets");
+  const [audience, setAudience] = useState("technician");
+  const [tabs, setTabs] = useState(null);
+  const [open, setOpen] = useState(null);
+  const [technicians, setTechnicians] = useState([]);
+  const [saving, setSaving] = useState(false);
+  const listInfo = TAB_LISTS.find((l) => l.key === listKey);
+  const def = useMemo(() => {
+    const roles = rolesForAudience(audience);
+    const ctx = { me, roles, lookups, technicians };
+    return listKey === "tickets" ? ticketList(ctx) : listKey === "events" ? eventList(ctx) : peopleList(ctx);
+  }, [listKey, audience, me, lookups, technicians]);
+
   useEffect(() => {
-    load();
-  }, [load]);
-  async function remove(view) {
-    if (!confirm(`Stop sharing "${view.Name}" with the team? It's deleted for everyone.`)) return;
+    api.users({ technicians: 1 }).then(setTechnicians).catch(() => {});
+  }, []);
+  useEffect(() => {
+    if (!listInfo.audiences.includes(audience)) setAudience(listInfo.audiences[listInfo.audiences.length - 1]);
+  }, [listInfo, audience]);
+  useEffect(() => {
+    if (!listInfo.audiences.includes(audience)) return;
+    setTabs(null);
+    setOpen(null);
+    api.defaultTabs(listKey, audience)
+      .then((rows) => setTabs(rows.map((t) => ({ name: t.Name, settings: normalizeSettings(def, t.Settings) }))))
+      .catch((e) => notify(e.message, true));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [listKey, audience]);
+
+  const change = (i, patch) => setTabs(tabs.map((t, j) => (j === i ? { ...t, ...patch } : t)));
+  const move = (i, step) => {
+    const next = [...tabs];
+    [next[i], next[i + step]] = [next[i + step], next[i]];
+    setTabs(next);
+    setOpen(null);
+  };
+
+  async function save() {
+    setSaving(true);
     try {
-      await api.deleteView(view.Id);
-      notify(`Deleted the team view ${view.Name}.`);
-      load();
+      const saved = await api.saveDefaultTabs(listKey, audience, tabs.map((t) => ({ name: t.name.trim(), settings: t.settings })));
+      setTabs(saved.map((t) => ({ name: t.Name, settings: normalizeSettings(def, t.Settings) })));
+      notify(`Saved the default ${listInfo.label} tabs for ${AUDIENCE_LABELS[audience].toLowerCase()}.`);
+      onChange?.();
     } catch (err) {
       notify(err.message, true);
+    } finally {
+      setSaving(false);
     }
   }
-  if (!views) return <p className="muted">Loading…</p>;
+
   return (
-    <div>
+    <div className="form">
       <p className="muted small" style={{ marginTop: 0 }}>
-        Ticket views an admin saved with &quot;Share with the whole team&quot;. They show as Team: tabs on every technician&apos;s ticket list.
+        The tabs each group starts with. New accounts get a copy, and anyone can change their own. People who already have tabs keep
+        theirs until they click Reset to defaults, and someone whose role changes to or from Technician gets their new group&apos;s tabs.
       </p>
-      {!views.length && <p className="muted small">No shared views yet. Save one from the ticket list.</p>}
-      <div className="list-rows">
-        {views.map((v) => (
-          <div key={v.Id} className="lr">
-            <span className="name">Team: {v.Name} <span className="muted small">· by {v.OwnerName}, {formatDate(v.CreatedAt)}</span></span>
-            <button className="btn sm danger" onClick={() => remove(v)}>Delete</button>
-          </div>
-        ))}
+      <div className="row">
+        <label>
+          List
+          <select value={listKey} onChange={(e) => setListKey(e.target.value)}>
+            {TAB_LISTS.map((l) => <option key={l.key} value={l.key}>{l.label}</option>)}
+          </select>
+        </label>
+        <label>
+          Group
+          <select value={audience} onChange={(e) => setAudience(e.target.value)}>
+            {listInfo.audiences.map((a) => <option key={a} value={a}>{AUDIENCE_LABELS[a]}</option>)}
+          </select>
+        </label>
       </div>
+      {audience === "requester" && listKey === "tickets" && (
+        <p className="muted small" style={{ margin: 0 }}>Requesters only see tickets they&apos;re on, plus their departments&apos; when they manage one, so whole-queue choices aren&apos;t offered.</p>
+      )}
+      {!tabs ? <p className="muted">Loading…</p> : (
+        <div className="tab-rows">
+          {tabs.map((t, i) => (
+            <div key={i} className="tab-block">
+              <div className="tab-row">
+                <input aria-label="Tab name" maxLength={100} value={t.name} onChange={(e) => change(i, { name: e.target.value })} />
+                <span className="muted small grow">{describeSettings(def, t.settings)}</span>
+                <button className="btn sm" onClick={() => setOpen(open === i ? null : i)} aria-expanded={open === i}>Filters</button>
+                <button className="btn sm" aria-label={`Move ${t.name} up`} disabled={i === 0} onClick={() => move(i, -1)}>↑</button>
+                <button className="btn sm" aria-label={`Move ${t.name} down`} disabled={i === tabs.length - 1} onClick={() => move(i, 1)}>↓</button>
+                <button className="btn sm danger" disabled={tabs.length === 1} onClick={() => { setTabs(tabs.filter((_, j) => j !== i)); setOpen(null); }}>Remove</button>
+              </div>
+              {open === i && (
+                <div className="card" style={{ padding: 12 }}>
+                  <FilterFields def={def} base={t.settings.base} values={t.settings.filters}
+                    onBase={(base) => change(i, { settings: { ...t.settings, base } })}
+                    onValues={(filters) => change(i, {
+                      settings: { ...t.settings, filters: Object.fromEntries(Object.entries(filters).filter(([, v]) => v)) }
+                    })} />
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {tabs && (
+        <div className="row">
+          <button className="btn sm" onClick={() => { setTabs([...tabs, { name: "New tab", settings: normalizeSettings(def, {}) }]); setOpen(tabs.length); }}>Add tab</button>
+          <button className="btn pri sm" disabled={saving || tabs.some((t) => !t.name.trim())} onClick={save}>{saving ? "Saving…" : "Save"}</button>
+        </div>
+      )}
     </div>
   );
 }

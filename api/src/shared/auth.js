@@ -103,6 +103,16 @@ async function getCurrentUser(request) {
   }
 
   if (!user.IsActive) throw new HttpError(403, "Your account has been deactivated");
+  // The departments they manage (they can see and reply on those people's
+  // tickets) and whether their "Show my departments' tickets" switch is on.
+  const managed = await pool.request().input("Id", sql.Int, user.Id).query(`
+    SELECT (SELECT STRING_AGG(CAST(m.DepartmentId AS NVARCHAR(20)), ',') FROM dbo.DepartmentManagers m WHERE m.UserId = u.Id) AS Managed,
+           u.ShowDepartmentTickets
+    FROM dbo.Users u WHERE u.Id = @Id
+  `);
+  const row = managed.recordset[0] || {};
+  user.ManagedDepartmentIds = row.Managed ? row.Managed.split(",").map(Number) : [];
+  user.ShowDepartmentTickets = !!row.ShowDepartmentTickets;
   return user;
 }
 

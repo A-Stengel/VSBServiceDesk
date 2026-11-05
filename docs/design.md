@@ -329,7 +329,7 @@ Priority, CC and Attachments.
 - **Ticket.** A ticket list on the left, the conversation in the middle, and a
   side panel with Status, Category, Subcategory, Priority, Type, Technician,
   Requester and Department. Below the conversation are Reply, Technician note,
-  Attachments and Move to Closure.
+  Attachments and Close ticket.
 - **Ticket extras.** Shown depending on the ticket type and category: start and
   end dates, inventory lines with costs, license seats, or an onboarding or
   offboarding checklist. An Equipment Rental / Event Booking ticket shows a
