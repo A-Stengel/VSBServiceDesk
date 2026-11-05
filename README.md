@@ -531,7 +531,7 @@ $filter = "PrimarySmtpAddress -eq 'servicedesk@vsb.org'" +
   " -or PrimarySmtpAddress -eq 'sdtest@vsb.org'" +
   " -or PrimarySmtpAddress -eq 'VSBEventsCalender@vsb.org'"
 New-ManagementScope -Name $scope -RecipientRestrictionFilter $filter
-$roles = "Application Mail.Read", "Application Mail.Send",
+$roles = "Application Mail.ReadWrite", "Application Mail.Send",
   "Application Calendars.ReadWrite"
 foreach ($role in $roles) {
   New-ManagementRoleAssignment -App $objectId -Role $role `
@@ -543,6 +543,15 @@ Test-ServicePrincipalAuthorization -Identity $objectId -Resource someone.else@vs
 
 The first test should list the three roles with `InScope` True; the second
 should show `InScope` False. Changes can take up to an hour to apply.
+
+Mail.ReadWrite (not just Mail.Read) is needed because every email is saved
+as a draft in the mailbox, gets its attachments, and is then sent. If the
+mailbox was set up with Application Mail.Read, add the missing role:
+
+```powershell
+New-ManagementRoleAssignment -App $objectId -Role "Application Mail.ReadWrite" `
+  -CustomResourceScope "Service desk mailboxes"
+```
 
 Optional: the Graph permission User.Read.All (granted in Entra ID) lets the
 app tell shared mailboxes apart when it creates accounts for new senders.
