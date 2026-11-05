@@ -194,11 +194,28 @@ rename statuses freely.
 ### Catalog tables
 
 - **InventoryItems.** Name, UnitCost (USD), QuantityOwned, LowStockAt,
-  IsDefaultForOnboarding, IsActive. `LowStockAt` is the number at or below
-  which Available turns orange on the Inventory page. Empty means the item
-  never warns.
-- **Software.** Name, CostPerSeat (USD), BillingPeriodId, SeatsPurchased,
-  IsDefaultForOnboarding, IsActive.
+  IsActive. `LowStockAt` is the number at or below which Available turns
+  orange on the Inventory page. Empty means the item never warns.
+- **Software.** One license: Name, CostPerSeat (USD), BillingPeriodId,
+  SeatsPurchased, ApplicationId (the software it's for), ImisAccess (read or
+  edit, for iMIS licenses), IsActive.
+- **Applications.** The friendly software names on the Onboarding form:
+  Name, Description, IsImis, SortOrder, IsActive.
+- **ImisModules, ImisRoles, ImisGroups.** What IT can give in iMIS. Each
+  module gets a level from 0 to 8 (7 isn't used).
+- **JobTitles.** Each department's titles: DepartmentId, Name, SortOrder,
+  IsActive.
+- **OnboardingDefaults.** What a title gets (JobTitleId empty for the
+  general set): Kind (item, app, printer, mailbox, calendar, phone,
+  imisModule, imisRole, imisGroup), RefId, SoftwareId (the exact license for
+  an app), Level, Text, IsRequired.
+- **Printers.** Name, Model, Location, DepartmentId, IsActive.
+- **InkCartridges.** Name (type), Color, QuantityOnHand (never below zero),
+  LowStockAt, UnitCost. **InkCartridgePrinters** says which printers each
+  works with.
+- **PersonAccess.** Access a person holds besides equipment and seats:
+  UserId, Kind, RefId or Text, Level, when and on which ticket it was given
+  and removed.
 
 ### The two core tables
 
@@ -312,7 +329,10 @@ Priority, CC and Attachments.
 - **Support.** Category and Subcategory.
 - **Access & Equipment.** Category first (Onboarding, Access & Equipment
   Change or Off Boarding), then that category's fields:
-  - **Onboarding.** New hire's name, department and start date.
+  - **Onboarding.** New hire's first name, last name, display name,
+    department, job title and start date, then equipment, software they
+    need, shared mailboxes, calendars, phone lines and printers, filled in
+    from the job title's defaults.
   - **Access & Equipment Change.** Who it's for, and the equipment or software
     to add or remove.
   - **Off Boarding.** Who is leaving, and their last day.
@@ -479,16 +499,25 @@ panels appear. Costs are recorded for tracking only and are never billed.
   out for those dates, and the app warns you if a booking would need more than
   you own. Marking a line Returned puts the items back. A rental linked to an
   event booking takes its dates from the booking.
-- **Access & Equipment, Onboarding.** A checklist with every inventory item
-  and software marked as an onboarding default already ticked. The technician
-  unticks or adds items, and each ticked line becomes an inventory line with no
-  end date (the person keeps it) or a seat.
+- **Access & Equipment, Onboarding.** The form starts from the job title's
+  defaults (or the general defaults); required equipment and software can't
+  be removed there. The checklist lists each item, each software with the
+  exact license from the defaults (a dropdown changes it), each access entry,
+  and, when iMIS is asked for, the title's iMIS module levels, roles and
+  groups. A read only iMIS license gets the StaffReadOnly role and no module
+  levels. Ticking a line hands out the item, assigns the seat or records the
+  access on the person.
+- **Support, Low ink.** A subcategory marked "Asks which printer and ink"
+  asks for the printer and which of its cartridges are low. The technician
+  sees each cartridge's stock and clicks Take 1, which lowers the count.
 - **Access & Equipment, Access & Equipment Change.** Inventory lines and
   software seats for the person, in both directions. Adding gives them
   equipment to keep or a new seat at the current seat cost. Removing returns
   equipment they hold or frees a seat. There is no approval step.
 - **Access & Equipment, Off Boarding.** A checklist of everything the person
-  currently holds. Marking a line done returns the equipment or frees the seat.
+  currently holds, including mailboxes, calendars, phone lines, printers and
+  iMIS access. Marking a line done returns the equipment, frees the seat or
+  records the access as removed.
 - **Support.** No extra panel.
 
 The numbers are worked out like this:

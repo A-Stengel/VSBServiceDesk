@@ -12,7 +12,7 @@ const { lowestAvailable } = require("../shared/inventory");
 
 async function equipment(db) {
   const result = await db.request().query(`
-    SELECT i.Id, i.Name, i.UnitCost, i.QuantityOwned, i.IsActive, i.IsDefaultForOnboarding, i.LowStockAt,
+    SELECT i.Id, i.Name, i.UnitCost, i.QuantityOwned, i.IsActive, i.LowStockAt,
            COALESCE(o.QuantityOut, 0) AS QuantityOut,
            i.QuantityOwned - COALESCE(o.QuantityOut, 0) AS Available,
            CAST(CASE WHEN EXISTS (
@@ -36,12 +36,14 @@ async function equipment(db) {
 
 async function licenses(db) {
   const result = await db.request().query(`
-    SELECT s.Id, s.Name, s.CostPerSeat, s.SeatsPurchased, s.IsActive, s.IsDefaultForOnboarding,
+    SELECT s.Id, s.Name, s.CostPerSeat, s.SeatsPurchased, s.IsActive,
            s.BillingPeriodId, b.Name AS BillingPeriodName, b.MonthsPerPeriod,
+           s.ApplicationId, a.Name AS ApplicationName, a.IsImis, s.ImisAccess,
            (SELECT COUNT(*) FROM dbo.LicenseAssignments la WHERE la.SoftwareId = s.Id AND la.RemovedAt IS NULL) AS SeatsUsed,
            CAST(s.SeatsPurchased * s.CostPerSeat / NULLIF(b.MonthsPerPeriod, 0) AS DECIMAL(12, 2)) AS MonthlyCost
     FROM dbo.Software s
     JOIN dbo.BillingPeriods b ON b.Id = s.BillingPeriodId
+    LEFT JOIN dbo.Applications a ON a.Id = s.ApplicationId
     WHERE s.IsDeleted = 0
     ORDER BY s.SortOrder, s.Name
   `);
@@ -170,7 +172,8 @@ endpoint(
 );
 
 // Body: any of { name, count, cost, isActive } and, for equipment,
-// lowStockAt or, for licenses, billingPeriodId
+// lowStockAt or, for licenses, billingPeriodId, applicationId (the software
+// it's for, on the forms) and imisAccess ("read", "edit" or blank)
 endpoint(
   "updateInventory",
   { methods: ["PATCH"], route: "inventory/{kind}/{id:int}", role: "technician", failMessage: "Could not save it" },
@@ -249,6 +252,33 @@ endpoint(
             notes.push(`${before.Name}: billed ${String(Was).toLowerCase()} to ${Now.toLowerCase()}`);
           }
         }
+        if (kind === KINDS.licenses && ("applicationId" in body || "imisAccess" in body)) {
+          const link = (await tx.request().input("Id", sql.Int, id).query(`
+            SELECT s.ApplicationId, a.Name AS ApplicationName, s.ImisAccess
+            FROM dbo.Software s LEFT JOIN dbo.Applications a ON a.Id = s.ApplicationId WHERE s.Id = @Id
+          `)).recordset[0];
+          if ("applicationId" in body) {
+            const applicationId = optionalId(body.applicationId, "Software");
+            if (applicationId !== link.ApplicationId) {
+              const app = applicationId
+                ? (await tx.request().input("AppId", sql.Int, applicationId).query("SELECT Name FROM dbo.Applications WHERE Id = @AppId")).recordset[0]
+                : null;
+              if (applicationId && !app) throw new HttpError(400, "That software doesn't exist");
+              sets.push("ApplicationId = @ApplicationId");
+              req.input("ApplicationId", sql.Int, applicationId);
+              notes.push(`${before.Name}: software ${link.ApplicationName || "none"} to ${app ? app.Name : "none"}`);
+            }
+          }
+          if ("imisAccess" in body) {
+            const imisAccess = body.imisAccess || null;
+            if (imisAccess !== null && !["read", "edit"].includes(imisAccess)) throw new HttpError(400, "iMIS access must be read or edit");
+            if (imisAccess !== link.ImisAccess) {
+              sets.push("ImisAccess = @ImisAccess");
+              req.input("ImisAccess", sql.NVarChar(10), imisAccess);
+              notes.push(`${before.Name}: iMIS access ${link.ImisAccess || "none"} to ${imisAccess || "none"}`);
+            }
+          }
+        }
         if ("isActive" in body && !!body.isActive !== before.IsActive) {
           sets.push("IsActive = @IsActive");
           req.input("IsActive", sql.Bit, !!body.isActive);
@@ -287,7 +317,7 @@ endpoint(
         // The name is freed so a new one can use it
         .query(`
           UPDATE ${kind.table}
-          SET IsDeleted = 1, IsActive = 0, IsDefaultForOnboarding = 0,
+          SET IsDeleted = 1, IsActive = 0,
               Name = CONCAT(LEFT(Name, 120), N' (deleted #', Id, N')')
           WHERE Id = @Id
         `);

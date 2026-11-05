@@ -168,9 +168,10 @@ makes a change if it hasn't been made yet, so running one twice is safe.
       `BookingEvents`). See "Ticket types and event booking" below.
    8. `09_visual_overhaul.sql`, `10_delete_retired_ticket_types.sql`,
       `11_one_ticket_bookings.sql`, `12_light_and_dark_mode.sql`,
-      `13_email_and_automation.sql`, `14_person_profile_fields.sql` and
-      `15_personal_tabs_and_ticket_actions.sql`. Scripts 09, 10, 11, 13, 14
-      and 15 have their own sections below.
+      `13_email_and_automation.sql`, `14_person_profile_fields.sql`,
+      `15_personal_tabs_and_ticket_actions.sql` and
+      `16_onboarding_sets_printers_and_ink.sql`. Scripts 09, 10, 11, 13,
+      14, 15 and 16 have their own sections below.
 4. Leave `06_grant_function_app.sql` for Step 3.
 
 If `03_users.sql` prints a WARNING about duplicate emails, remove the
@@ -488,6 +489,51 @@ reply box: Close ticket is the only way to close a ticket by hand. Automatic
 closes (no answer after the waiting period, merges, finished room-only
 bookings) still happen on their own and keep their line in the ticket's
 history.
+
+### Onboarding defaults, printers and ink (script 16)
+
+Run `16_onboarding_sets_printers_and_ink.sql` once, **before** publishing
+the API (the same two commands as above). Every ticket page reads the new
+ticket columns, so publishing first makes tickets show an error until the
+script runs. It is safe to run twice. In plain terms it:
+
+- Adds **Software**: the friendly names people pick on the Onboarding form
+  (Microsoft 365, Adobe Acrobat, iMIS...). Each license on the Inventory
+  page can say which software it's for, and an iMIS license says whether
+  it's read only or edit. Every license you have now gets a Software entry
+  with the same name, linked to it, so nothing is lost; rename or merge
+  them in Settings afterwards.
+- Adds the **iMIS lists** (modules, roles and security groups), filled in
+  with the ones from the iMIS screens.
+- Adds **job titles** under each department, and the **onboarding
+  defaults** for each title plus a general set. The equipment and licenses
+  that were ticked as onboarding defaults become the general set.
+- Adds **printers**, **ink and toner** (type, color, count, warn at, and
+  the printers each cartridge works with), and a **Low ink** subcategory
+  under the Support category whose name starts with "Printer" (or a new
+  Printers category). Low ink tickets ask which printer and which colors.
+- Adds the **access** a person holds besides equipment and licenses:
+  shared mailboxes, shared calendars, phone queues and lines, printers and
+  iMIS. It shows on the person page and off boarding lists it.
+
+After publishing:
+
+1. Settings, **Software**: check the names and descriptions. On the
+   Inventory page, Licenses tab, set "Software it's for" on each license,
+   and read only or edit on the iMIS ones.
+2. Settings, **iMIS lists**: check the modules, roles and groups.
+3. Inventory, **Printers** and **Ink and toner**: add the printers, then
+   the cartridges and which printers they work with.
+4. Settings, **Onboarding defaults**: set the general defaults, then pick a
+   department and add its job titles and what each gets. Tick Required on
+   anything the form must always include.
+
+On the Onboarding form, picking a job title fills in its defaults; required
+items can't be taken off. A title typed with "Something else" is added to
+the department, starting from the general defaults. Licenses and iMIS
+access are never shown on the form: the ticket's checklist lists the exact
+license (with a dropdown to change it) and each iMIS module level, and
+ticking a line gives the person that access.
 
 ### Email, automations and maintenance mode (script 13)
 

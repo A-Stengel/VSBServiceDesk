@@ -446,3 +446,30 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 14px; }
 }
 .multi-options { max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; }
 .multi-options .check { min-height: 34px; font-weight: 400; }
+
+/* Onboarding: software cards, note-style lists, locked picks */
+.app-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
+.app-card {
+  display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--line); border-radius: 10px;
+  padding: 10px 12px; cursor: pointer; font-weight: 400; background: var(--card);
+}
+.app-card > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.app-card.on { border-color: var(--acc); background: var(--acc-soft); }
+.app-card input { margin-top: 3px; }
+.note-list { display: flex; flex-direction: column; gap: 6px; }
+.note-list-label { font-weight: 600; font-size: 14px; }
+.note-list ul { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line-soft); border-radius: 8px; }
+.note-list li { display: flex; justify-content: space-between; gap: 10px; padding: 6px 10px; border-bottom: 1px solid var(--line-soft); min-width: 0; }
+.note-list li:last-child { border-bottom: 0; }
+.note-list li > span { overflow-wrap: anywhere; min-width: 0; }
+.note-list-add { display: flex; gap: 8px; }
+.note-list-add input { flex: 1; min-width: 0; }
+.chip.locked { font-weight: 600; }
+.pick-list { max-height: 220px; overflow-y: auto; border: 1px solid var(--line-soft); border-radius: 8px; padding: 4px 10px; display: flex; flex-direction: column; }
+.pick-list .check { min-height: 32px; font-weight: 400; }
+.stack-list { display: flex; flex-direction: column; gap: 6px; }
+.stack-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; border: 1px solid var(--line-soft); border-radius: 8px; padding: 6px 10px; }
+.stack-row > .grow { flex: 1; min-width: 140px; overflow-wrap: anywhere; }
+.stack-row select { width: auto; max-width: 100%; }
+.highlight-row td { background: var(--acc-soft); }
+.lr.on { background: var(--acc-soft); border-radius: 8px; }

@@ -27,10 +27,25 @@ endpoint("getLookups", { methods: ["GET"], route: "lookups", open: true }, async
     FROM dbo.TicketTypeFields
     ORDER BY TicketTypeId, SortOrder
   `);
+  // Printers for the onboarding and low ink forms, and which cartridges
+  // each one takes
+  const printers = await pool.request().query(`
+    SELECT Id, Name, Model, Location, DepartmentId FROM dbo.Printers
+    WHERE IsActive = 1 AND IsDeleted = 0 ORDER BY Name
+  `);
+  const printerInk = await pool.request().query(`
+    SELECT cp.PrinterId, c.Id AS InkCartridgeId, c.Name, c.Color
+    FROM dbo.InkCartridgePrinters cp
+    JOIN dbo.InkCartridges c ON c.Id = cp.InkCartridgeId
+    WHERE c.IsActive = 1 AND c.IsDeleted = 0
+    ORDER BY c.Name, c.Color
+  `);
   const settings = await getSettings();
   return {
     jsonBody: {
       ...lookups,
+      printers: printers.recordset,
+      printerInk: printerInk.recordset,
       ticketTypeFields: fields.recordset,
       defaults: {
         newStatusId: settings.NewStatusId,

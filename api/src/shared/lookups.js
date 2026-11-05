@@ -40,7 +40,11 @@ const LOOKUPS = {
   subcategories: {
     table: "dbo.Subcategories",
     label: "Subcategories",
-    columns: [{ name: "CategoryId", label: "Category", type: "ref", ref: "categories", required: true }, ...common]
+    columns: [
+      { name: "CategoryId", label: "Category", type: "ref", ref: "categories", required: true },
+      ...common,
+      { name: "AsksForInk", label: "Asks which printer and ink", type: "bit" }
+    ]
   },
   sources: { table: "dbo.Sources", label: "Sources", columns: common },
   ticketTypes: {
@@ -117,7 +121,6 @@ const LOOKUPS = {
       { ...common[0], max: 150 },
       { name: "UnitCost", label: "Unit cost ($)", type: "decimal" },
       { name: "QuantityOwned", label: "Quantity owned", type: "int" },
-      { name: "IsDefaultForOnboarding", label: "Onboarding default", type: "bit" },
       common[1],
       common[2]
     ]
@@ -130,7 +133,35 @@ const LOOKUPS = {
       { name: "CostPerSeat", label: "Cost per seat ($)", type: "decimal" },
       { name: "BillingPeriodId", label: "Billed", type: "ref", ref: "billingPeriods", required: true },
       { name: "SeatsPurchased", label: "Seats purchased", type: "int" },
-      { name: "IsDefaultForOnboarding", label: "Onboarding default", type: "bit" },
+      { name: "ApplicationId", label: "Software it's for", type: "ref", ref: "applications" },
+      { name: "ImisAccess", label: "iMIS access", type: "choice", choices: ["read", "edit"] },
+      common[1],
+      common[2]
+    ]
+  },
+  // The friendly software names on the Onboarding form. Licenses (above)
+  // say which one they belong to.
+  applications: {
+    table: "dbo.Applications",
+    label: "Software",
+    columns: [
+      common[0],
+      { name: "Description", label: "Description (shown on the form)", type: "string", max: 200 },
+      { name: "IsImis", label: "iMIS (technicians set module levels, roles and groups)", type: "bit" },
+      common[1],
+      common[2]
+    ]
+  },
+  imisModules: { table: "dbo.ImisModules", label: "iMIS modules", columns: common },
+  imisRoles: { table: "dbo.ImisRoles", label: "iMIS roles", columns: common },
+  imisGroups: { table: "dbo.ImisGroups", label: "iMIS security groups", columns: common },
+  // Each department's job titles, for onboarding defaults
+  jobTitles: {
+    table: "dbo.JobTitles",
+    label: "Job titles",
+    columns: [
+      { name: "DepartmentId", label: "Department", type: "ref", ref: "departments", required: true },
+      { ...common[0], max: 150 },
       common[1],
       common[2]
     ]

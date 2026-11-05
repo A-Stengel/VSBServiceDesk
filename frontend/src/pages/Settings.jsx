@@ -4,6 +4,7 @@ import { api, formatDate, timeAgo } from "../api.js";
 import { useApp } from "../App.jsx";
 import Logo, { logoChanged } from "../components/Logo.jsx";
 import RichEditor from "../components/RichEditor.jsx";
+import OnboardingDefaultsEditor from "../components/OnboardingDefaultsEditor.jsx";
 import { HeldMailList } from "./HeldMail.jsx";
 import { FilterFields } from "../components/ListView.jsx";
 import { describeSettings, eventList, normalizeSettings, peopleList, rolesForAudience, ticketList } from "../lists.js";
@@ -44,7 +45,9 @@ const SECTIONS = [
   { key: "notifications", label: "Notifications", history: "notifications" },
   { key: "templates", label: "Email templates", history: "templates" },
   { group: "Inventory and team" },
-  { key: "onboarding", label: "Onboarding defaults", history: "inventoryItems,software" },
+  { key: "onboarding", label: "Onboarding defaults", history: "onboarding,jobTitles" },
+  { key: "applications", label: "Software", table: "applications" },
+  { key: "imis", label: "iMIS lists", history: "imisModules,imisRoles,imisGroups" },
   { key: "defaultTabs", label: "Default tabs", history: "defaultTabs" },
   { group: "System" },
   { key: "access", label: "Access and maintenance", history: "access" },
@@ -78,6 +81,9 @@ const DESCRIPTIONS = {
   heldMail: "Email from people the desk doesn't know yet (while \"Create accounts for new senders\" is off), and email that couldn't be handled.",
   access: "Who can use the web app. Email keeps working either way.",
   appearance: "The colors for light mode and dark mode. Everyone picks Light, Dark or Match device from the menu under their name.",
+  onboarding: "What each job title gets when someone is onboarded. The Onboarding form fills these in when the title is picked; required equipment and software can't be taken off there. Licenses and iMIS access are only shown to IT.",
+  applications: "The software people pick on the Onboarding form, in plain terms. Each license on the Inventory page says which of these it's for, so IT knows the exact license to give.",
+  imis: "The iMIS modules, roles and security groups IT can give. Each module gets its own level (0 to 8) in the onboarding defaults and on the ticket.",
   logo: "Shown in the header, on the loading screen and in the browser tab. A square PNG with a transparent background looks best."
 };
 
@@ -159,7 +165,17 @@ function Section({ section, onChange }) {
     case "templates":
       return <Templates onChange={onChange} />;
     case "onboarding":
-      return <OnboardingDefaults onChange={onChange} />;
+      return <OnboardingDefaultsEditor onChange={onChange} />;
+    case "applications":
+      return <Applications onChange={onChange} />;
+    case "imis":
+      return (
+        <div className="stack">
+          <LookupList table="imisModules" title="Modules" onChange={onChange} />
+          <LookupList table="imisRoles" title="Roles" onChange={onChange} />
+          <LookupList table="imisGroups" title="Security groups" onChange={onChange} />
+        </div>
+      );
     case "organization":
       return <SettingsForm keys={ORGANIZATION_KEYS} onChange={onChange} notes={ORGANIZATION_NOTES} />;
     case "defaultTabs":
@@ -901,46 +917,28 @@ function Guidelines({ onChange }) {
   );
 }
 
-// The equipment and licenses ticked on every new Onboarding request.
-function OnboardingDefaults({ onChange }) {
-  const { lookups, reloadLookups, notify } = useApp();
-  async function toggle(table, row, on) {
-    try {
-      await api.adminUpdateLookup(table, row.Id, { IsDefaultForOnboarding: on });
-      await reloadLookups();
-      notify(`${row.Name} ${on ? "added to" : "removed from"} the onboarding defaults.`);
-      onChange();
-    } catch (err) {
-      notify(err.message, true);
-    }
-  }
+// The friendly software names, and which licenses are linked to each
+function Applications({ onChange }) {
+  const { lookups } = useApp();
+  const unlinked = lookups.software.filter((s) => !s.ApplicationId);
   return (
     <div className="stack">
-      <p className="muted small" style={{ margin: 0 }}>Ticked on every new Onboarding request. The technician can still change them on the form.</p>
-      <fieldset>
-        <legend>Equipment</legend>
-        {!lookups.inventoryItems.length && <span className="muted small">No equipment yet. Add it on the Inventory page.</span>}
-        <div className="checks">
-          {lookups.inventoryItems.map((i) => (
-            <label key={i.Id} className="check">
-              <input type="checkbox" checked={!!i.IsDefaultForOnboarding} onChange={(e) => toggle("inventoryItems", i, e.target.checked)} />
-              {i.Name}
-            </label>
-          ))}
-        </div>
-      </fieldset>
-      <fieldset>
-        <legend>Software licenses</legend>
-        {!lookups.software.length && <span className="muted small">No licenses yet. Add them on the Inventory page.</span>}
-        <div className="checks">
-          {lookups.software.map((s) => (
-            <label key={s.Id} className="check">
-              <input type="checkbox" checked={!!s.IsDefaultForOnboarding} onChange={(e) => toggle("software", s, e.target.checked)} />
-              {s.Name}
-            </label>
-          ))}
-        </div>
-      </fieldset>
+      <LookupList table="applications" onChange={onChange} />
+      <div>
+        <h3>Linked licenses</h3>
+        <ul className="history">
+          {(lookups.applications || []).map((a) => {
+            const linked = lookups.software.filter((s) => s.ApplicationId === a.Id);
+            return (
+              <li key={a.Id}>
+                <strong>{a.Name}</strong>: {linked.length ? linked.map((l) => l.Name).join(", ") : <span className="warn">no licenses linked</span>}
+              </li>
+            );
+          })}
+          {unlinked.length > 0 && <li className="muted">Not linked to any software: {unlinked.map((l) => l.Name).join(", ")}</li>}
+        </ul>
+        <p className="muted small" style={{ marginBottom: 0 }}>Link a license on the Inventory page, Licenses tab.</p>
+      </div>
     </div>
   );
 }

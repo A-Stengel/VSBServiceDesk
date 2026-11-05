@@ -13,6 +13,7 @@ const { getConnection, withTransaction, sql } = require("../shared/db");
 const { USER_SELECT, isStaffEmail } = require("../shared/auth");
 const { getSettings } = require("../shared/settings");
 const { getHoldings } = require("../shared/holdings");
+const { readAccess, accessName, accessLabel, grantAccess } = require("../shared/access");
 const { readItems, addTicketItem, assertSeats } = require("../shared/inventory");
 const { logChange, listChanges } = require("../shared/changelog");
 const { resetTabs } = require("../shared/tabs");
@@ -142,7 +143,8 @@ endpoint("getUser", { methods: ["GET"], route: "users/{id:int}", role: "technici
 });
 
 // Technicians hand something straight to a person from their page.
-// Body: { inventoryItemId, quantity } or { softwareId }
+// Body: { inventoryItemId, quantity }, { softwareId } or
+// { access: { kind, refId, text, level } }
 endpoint(
   "assignHolding",
   { methods: ["POST"], route: "users/{id:int}/holdings", role: "technician", failMessage: "Could not assign it" },
@@ -153,7 +155,11 @@ endpoint(
       const person = await loadPerson(tx, id);
       if (!person.IsActive) throw new HttpError(400, "This account is off. Start onboarding to bring them back first.");
       let summary;
-      if (body.softwareId) {
+      if (body.access) {
+        const entry = readAccess(body.access);
+        await grantAccess(tx, id, entry);
+        summary = `Gave ${accessLabel(entry, await accessName(tx, entry))}`;
+      } else if (body.softwareId) {
         const softwareId = optionalId(body.softwareId, "Software");
         const seat = await tx.request().input("UserId", sql.Int, id).input("SoftwareId", sql.Int, softwareId).query(`
           INSERT INTO dbo.LicenseAssignments (UserId, SoftwareId, CostPerSeatAtTime)
@@ -175,7 +181,8 @@ endpoint(
   }
 );
 
-// Body: { ticketItemId } (equipment comes back) or { seatId } (seat removed)
+// Body: { ticketItemId } (equipment comes back), { seatId } (seat removed)
+// or { accessId } (access taken away)
 endpoint(
   "returnHolding",
   { methods: ["POST"], route: "users/{id:int}/holdings/return", role: "technician", failMessage: "Could not save it" },
@@ -185,7 +192,12 @@ endpoint(
     await withTransaction(async (tx) => {
       const holdings = await getHoldings(tx, id);
       let summary;
-      if (body.seatId) {
+      if (body.accessId) {
+        const given = holdings.access.find((a) => a.Id === Number(body.accessId));
+        if (!given) throw new HttpError(400, "They don't have that access any more");
+        await tx.request().input("Id", sql.Int, given.Id).query("UPDATE dbo.PersonAccess SET RemovedAt = SYSUTCDATETIME() WHERE Id = @Id");
+        summary = `Removed ${given.Label}`;
+      } else if (body.seatId) {
         const seat = holdings.seats.find((s) => s.Id === Number(body.seatId));
         if (!seat) throw new HttpError(400, "They don't hold that seat any more");
         await tx.request().input("Id", sql.Int, seat.Id).query("UPDATE dbo.LicenseAssignments SET RemovedAt = SYSUTCDATETIME() WHERE Id = @Id");

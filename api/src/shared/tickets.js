@@ -21,6 +21,8 @@ const TICKET_SELECT = `
          r.DepartmentId AS RequesterDepartmentId, fu.DepartmentId AS ForUserDepartmentId,
          (SELECT STRING_AGG(xc.Email, ',') FROM dbo.TicketCc xc WHERE xc.TicketId = t.Id) AS CcEmails,
          t.ForPersonName, t.ForDepartmentId, fd.Name AS ForDepartmentName,
+         t.NewHireFirstName, t.NewHireLastName, t.JobTitleId, jt.Name AS JobTitleName,
+         t.PrinterId, pr.Name AS PrinterName, pr.Location AS PrinterLocation, sc.AsksForInk,
          t.TechnicianId, CASE WHEN te.Id IS NOT NULL THEN ${personName("te")} END AS TechnicianName,
          t.DepartmentId, d.Name AS DepartmentName,
          t.Subject, t.Description, t.StartDate, t.EndDate, t.StartAt, t.EndAt,
@@ -40,6 +42,8 @@ const TICKET_SELECT = `
   LEFT JOIN dbo.Subcategories sc ON sc.Id = t.SubcategoryId
   LEFT JOIN dbo.Users fu ON fu.Id = t.ForUserId
   LEFT JOIN dbo.Departments fd ON fd.Id = t.ForDepartmentId
+  LEFT JOIN dbo.JobTitles jt ON jt.Id = t.JobTitleId
+  LEFT JOIN dbo.Printers pr ON pr.Id = t.PrinterId
   LEFT JOIN dbo.Users te ON te.Id = t.TechnicianId
   LEFT JOIN dbo.Departments d ON d.Id = t.DepartmentId
   LEFT JOIN dbo.TicketRooms tr ON tr.TicketId = t.Id
@@ -172,11 +176,26 @@ async function accountOnClose(tx, ticket, status, actorId, warnings = []) {
     return;
   }
   const person = (await tx.request().input("Id", sql.Int, ticket.ForUserId).query("SELECT IsActive FROM dbo.Users WHERE Id = @Id")).recordset[0];
-  if (!person || !!person.IsActive === turnOn) return;
+  if (!person) return;
+  // Onboarding fills in the job title and department from the form, where
+  // the account doesn't have them yet
+  if (turnOn) {
+    await tx.request()
+      .input("Id", sql.Int, ticket.ForUserId)
+      .input("JobTitle", sql.NVarChar(150), ticket.JobTitleName || null)
+      .input("DepartmentId", sql.Int, ticket.ForDepartmentId || null)
+      .query(`
+        UPDATE dbo.Users
+        SET JobTitle = COALESCE(NULLIF(JobTitle, ''), @JobTitle),
+            DepartmentId = COALESCE(DepartmentId, @DepartmentId)
+        WHERE Id = @Id
+      `);
+  }
+  if (!!person.IsActive === turnOn) return;
   if (!turnOn) {
     const held = await getHoldings(tx, ticket.ForUserId);
-    const count = held.items.length + held.seats.length;
-    if (count) warnings.push(`${ticket.ForUserName} still holds ${count} item${count === 1 ? "" : "s"} or seat${count === 1 ? "" : "s"}. Check their page.`);
+    const count = held.items.length + held.seats.length + held.access.length;
+    if (count) warnings.push(`${ticket.ForUserName} still has ${count} item${count === 1 ? "" : "s"}, seat${count === 1 ? "" : "s"} or access. Check their page.`);
   }
   await tx.request().input("Id", sql.Int, ticket.ForUserId).input("On", sql.Bit, turnOn)
     .query("UPDATE dbo.Users SET IsActive = @On WHERE Id = @Id");
