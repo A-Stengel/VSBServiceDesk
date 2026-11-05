@@ -1,7 +1,7 @@
 const { endpoint } = require("../shared/endpoint");
 const { getConnection, sql } = require("../shared/db");
 const { getSettings } = require("../shared/settings");
-const { personName, formatNumber, FOR_IT_SQL } = require("../shared/tickets");
+const { personName, formatNumber, FOR_IT_SQL, MINE_SQL } = require("../shared/tickets");
 const { toSqlTime, wallNow } = require("../shared/clock");
 
 // The home page: the numbers on the tiles and the five latest things that
@@ -18,13 +18,14 @@ endpoint("home", { methods: ["GET"], route: "home" }, async (request, context, u
 
   const counts = (await pool.request()
     .input("Me", sql.Int, user.Id)
+    .input("MyEmail", sql.NVarChar(320), String(user.Email || "").toLowerCase())
     .input("Now", sql.DateTime2(0), toSqlTime(wallNow(settings)))
     .input("Pending", sql.Int, settings.BookingPendingStatusId ?? null)
     .input("Confirmed", sql.Int, settings.BookingConfirmedStatusId ?? null)
     .query(`
       SELECT
         (SELECT COUNT(*) FROM dbo.Tickets t JOIN dbo.Statuses s ON s.Id = t.StatusId
-          WHERE s.IsClosed = 0 AND (t.RequesterId = @Me OR t.ForUserId = @Me)) AS MyOpen,
+          WHERE s.IsClosed = 0 AND ${MINE_SQL}) AS MyOpen,
         (SELECT COUNT(*) FROM dbo.Tickets t JOIN dbo.Statuses s ON s.Id = t.StatusId
           WHERE s.IsClosed = 0 AND s.IsWaitingOnRequester = 1 AND t.RequesterId = @Me) AS WaitingOnMe,
         ${tech ? `
@@ -50,6 +51,7 @@ endpoint("home", { methods: ["GET"], route: "home" }, async (request, context, u
   const ROOM_ONLY_FIELDS = "N'Created', N'Room requested', N'Room status'";
   const activity = (await pool.request()
     .input("Me", sql.Int, user.Id)
+    .input("MyEmail", sql.NVarChar(320), String(user.Email || "").toLowerCase())
     .input("Tech", sql.Bit, tech)
     .input("EventManager", sql.Bit, eventManager)
     .query(`
@@ -60,7 +62,7 @@ endpoint("home", { methods: ["GET"], route: "home" }, async (request, context, u
         JOIN dbo.Tickets t ON t.Id = e.TicketId
         LEFT JOIN dbo.Users u ON u.Id = e.ActorId
         WHERE e.Field IN (N'Created', N'Status', N'Assigned To', N'Priority', N'Room requested', N'Room status', N'Equipment')
-          AND ((@Tech = 1 AND ${FOR_IT_SQL}) OR t.RequesterId = @Me OR t.ForUserId = @Me
+          AND ((@Tech = 1 AND ${FOR_IT_SQL}) OR ${MINE_SQL}
             OR (@EventManager = 1 AND e.Field IN (${ROOM_ONLY_FIELDS})
               AND EXISTS (SELECT 1 FROM dbo.TicketRooms hr WHERE hr.TicketId = t.Id)))
         UNION ALL
@@ -70,7 +72,7 @@ endpoint("home", { methods: ["GET"], route: "home" }, async (request, context, u
         JOIN dbo.Tickets t ON t.Id = c.TicketId
         JOIN dbo.Users u ON u.Id = c.AuthorId
         WHERE (@Tech = 1 AND ${FOR_IT_SQL})
-          OR ((t.RequesterId = @Me OR t.ForUserId = @Me) AND c.IsTechnicianNote = 0)
+          OR (${MINE_SQL} AND c.IsTechnicianNote = 0)
           OR (@EventManager = 1 AND (c.IsTechnicianNote = 0 OR c.VisibleToEventManagers = 1)
             AND EXISTS (SELECT 1 FROM dbo.TicketRooms hr WHERE hr.TicketId = t.Id))
       ) a

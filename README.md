@@ -25,12 +25,21 @@ final design in [docs/design.md](docs/design.md). It covers build steps 1 to
   itself after the event. The requester can change or cancel, and moving
   the event moves the equipment dates.
 - The Tickets, Rentals & Events and People lists all have tabs, search,
-  filters, sortable columns and saved views. Admins can share a ticket view
-  with the team, where it shows as a "Team:" tab.
+  filters and sortable columns. Every tab is the person's own saved filter
+  set: they can change and save it, add new tabs, rename, reorder and remove
+  them, or reset to the defaults admins set in Settings > Default tabs.
+- Department managers can switch on "Show my departments' tickets" and
+  reply on those tickets. Anyone CC'd on a ticket sees it in their lists.
+- Staff can submit a request for a coworker: the coworker becomes the
+  requester and the person submitting is CC'd. Technicians use the
+  Requester box instead.
 - The ticket page: the conversation, replies, technician notes (hidden from
   the requester), HR notes on bookings (HR and technicians), attachments,
   the side panel for status, technician, priority, type, category and the
-  rest, Move to Closure, and the history of every change.
+  rest, and the history of every change. Pick up assigns an unassigned
+  ticket to you after asking for any missing category, subcategory or
+  department. Close ticket asks for a written resolution (technicians only)
+  and is the only way to close a ticket by hand.
 - Rich text in descriptions, replies, notes and the booking guidelines:
   bold, italic, underline, lists and links, and pictures pasted or dragged
   into the text.
@@ -158,8 +167,10 @@ makes a change if it hasn't been made yet, so running one twice is safe.
       event booking tables (`BookingStatuses`, `Rooms`, `EventBookings` and
       `BookingEvents`). See "Ticket types and event booking" below.
    8. `09_visual_overhaul.sql`, `10_delete_retired_ticket_types.sql`,
-      `11_one_ticket_bookings.sql` and `12_light_and_dark_mode.sql`.
-      Scripts 09, 10 and 11 have their own sections below.
+      `11_one_ticket_bookings.sql`, `12_light_and_dark_mode.sql`,
+      `13_email_and_automation.sql` and
+      `15_personal_tabs_and_ticket_actions.sql`. Scripts 09, 10, 11, 13 and
+      15 have their own sections below.
 4. Leave `06_grant_function_app.sql` for Step 3.
 
 If `03_users.sql` prints a WARNING about duplicate emails, remove the
@@ -442,6 +453,26 @@ func azure functionapp publish func-vsb-servicedesk --javascript --build remote
 ```
 
 The website updates on its own when the change is merged.
+
+### Personal tabs, managers, Pick up and Close ticket (script 15)
+
+Run `15_personal_tabs_and_ticket_actions.sql` once, **before** publishing
+the API (the same two commands as above). It is safe to run twice. In plain
+terms it:
+
+- Turns every list tab into each person's own saved tab, and adds the
+  default tabs (the same ones the lists had) for requesters, event managers
+  and technicians. Each person gets a copy the first time they open a list.
+- Copies each team view an admin shared to every technician as their own
+  tab, then removes the shared copy. Team sharing is gone.
+- Adds the remembered "Show my departments' tickets" switch for managers.
+- Adds resolutions to the ticket conversation for Close ticket.
+
+After publishing, Closed is no longer offered in the Status dropdown or the
+reply box: Close ticket is the only way to close a ticket by hand. Automatic
+closes (no answer after the waiting period, merges, finished room-only
+bookings) still happen on their own and keep their line in the ticket's
+history.
 
 ### Email, automations and maintenance mode (script 13)
 

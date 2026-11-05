@@ -23,6 +23,8 @@ const { ticketCreated, ticketClosed } = require("../shared/notify");
 const {
   TICKET_SELECT,
   FOR_IT_SQL,
+  MINE_SQL,
+  departmentSql,
   ROOM_FIELDS,
   accessOf,
   forViewer,
@@ -128,6 +130,8 @@ endpoint("personHoldings", { methods: ["GET"], route: "people/{id:int}/holdings"
 
 // ?scope=mine|queue  ?state=open|closed|all  ?statusId  ?technicianId=me|none|<id>
 // ?ticketTypeId  ?priorityId  ?search
+// ?departments=1 also brings tickets from the departments a manager manages
+// (on "mine"; the queue already has everything).
 endpoint("listTickets", { methods: ["GET"], route: "tickets" }, async (request, context, user) => {
   const q = request.query;
   const scope = user.IsTechnician && q.get("scope") === "queue" ? "queue" : "mine";
@@ -136,11 +140,13 @@ endpoint("listTickets", { methods: ["GET"], route: "tickets" }, async (request, 
   const req = pool.request();
 
   if (scope === "mine") {
-    where.push("(t.RequesterId = @Me OR t.ForUserId = @Me)");
+    const departments = q.get("departments") === "1" && user.ManagedDepartmentIds?.length;
+    where.push(departments ? `(${MINE_SQL} OR ${departmentSql(user.ManagedDepartmentIds)})` : MINE_SQL);
   } else {
     where.push(FOR_IT_SQL);
   }
   req.input("Me", sql.Int, user.Id);
+  req.input("MyEmail", sql.NVarChar(320), String(user.Email || "").toLowerCase());
 
   const state = q.get("state") || "open";
   if (state === "open") where.push("s.IsClosed = 0");
@@ -272,8 +278,25 @@ endpoint(
       sourceId = optionalId(data.sourceId, "Source") || settings.WebSourceId;
       technicianId = optionalId(data.technicianId, "Technician");
     }
-    const requester = await one(pool, "SELECT Id, DepartmentId, IsActive FROM dbo.Users WHERE Id = @Id", { Id: [sql.Int, requesterId] });
+    // Anyone else can submit a request for a coworker (not on Access &
+    // Equipment, which asks who it's for itself). The coworker becomes the
+    // requester and the person submitting it is CC'd, so they still see it.
+    const forColleague = !user.IsTechnician && !type.UsesChecklist && !shown("forUser") && !shown("newHire") && !checklistSource
+      ? optionalId(data.onBehalfOfId, "Person") : null;
+    if (forColleague && forColleague !== user.Id) {
+      const colleague = await one(pool, "SELECT Id, UserTypeId, IsActive FROM dbo.Users WHERE Id = @Id", { Id: [sql.Int, forColleague] });
+      if (!colleague || !colleague.IsActive || colleague.UserTypeId !== settings.StaffUserTypeId) {
+        throw new HttpError(400, "Pick a coworker from the list");
+      }
+      requesterId = colleague.Id;
+      const mine = String(user.Email || "").toLowerCase();
+      if (mine && !cc.includes(mine)) cc.push(mine);
+    }
+    const requester = await one(pool, "SELECT Id, Email, DepartmentId, IsActive FROM dbo.Users WHERE Id = @Id", { Id: [sql.Int, requesterId] });
     if (!requester || !requester.IsActive) throw new HttpError(400, "That requester doesn't exist");
+    // The requester gets the emails anyway, so they aren't CC'd too
+    const requesterEmail = String(requester.Email || "").toLowerCase();
+    if (cc.includes(requesterEmail)) cc.splice(cc.indexOf(requesterEmail), 1);
     if (checklistSource === "offboarding" && !forUserId) throw new HttpError(400, "Pick who is leaving");
 
     const warnings = [];
@@ -379,7 +402,7 @@ endpoint("getTicket", { methods: ["GET"], route: "tickets/{id:int}" }, async (re
 
   const conversations = await pool.request().input("Id", sql.Int, id).query(`
     SELECT c.Id, c.AuthorId, ${personName("u")} AS AuthorName, u.Email AS AuthorEmail,
-           c.Body, c.IsTechnicianNote, c.VisibleToEventManagers, c.Direction, c.CreatedAt,
+           c.Body, c.IsTechnicianNote, c.IsResolution, c.VisibleToEventManagers, c.Direction, c.CreatedAt,
            ${tech || access.hr ? "c.EmailedAt, c.EmailNote, CASE WHEN c.EmailMessageId IS NOT NULL THEN 1 ELSE 0 END AS CameByEmail," : ""}
            c.MergedFromTicketId
     FROM dbo.TicketConversations c
@@ -541,6 +564,9 @@ endpoint(
       if (finalSub) {
         const sub = await one(tx, "SELECT CategoryId FROM dbo.Subcategories WHERE Id = @Id", { Id: [sql.Int, finalSub] });
         if (!sub || sub.CategoryId !== finalCategory) throw new HttpError(400, "That subcategory isn't under the ticket's category");
+      }
+      if (changes.StatusId && !ticket.IsClosed && (await getStatus(tx, changes.StatusId.value)).IsClosed) {
+        throw new HttpError(400, "Use Close ticket to close it, so it gets a resolution");
       }
       const columns = Object.keys(changes);
       if (!columns.length) return;

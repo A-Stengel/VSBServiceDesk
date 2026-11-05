@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { api } from "../api.js";
 import { useApp } from "../App.jsx";
 import { ListTabs, ListToolbar, SortTh, useListView } from "../components/ListView.jsx";
+import { peopleList } from "../lists.js";
 
 // Everyone in the user list: staff, outside people and shared mailboxes.
 // Outside people and shared mailboxes only email in, so their role shows as
@@ -20,48 +21,14 @@ export default function People() {
     api.users({ includeInactive: 1 }).then(setPeople).catch((e) => setError(e.message));
   }, []);
 
-  const tabs = useMemo(() => [
-    { key: "active", label: "Active", test: (p) => p.IsActive },
-    { key: "all", label: "Everyone" },
-    { key: "off", label: "Off boarded", test: (p) => !p.IsActive }
-  ], []);
-
-  const filters = useMemo(() => [
-    {
-      key: "role",
-      label: "Role",
-      options: [...lookups.roles.map((r) => ({ value: r.Name, label: r.Name })), { value: "Email only", label: "Email only" }],
-      test: (p, v) => roleLabel(p, lookups) === v
-    },
-    { key: "department", label: "Department", options: lookups.departments.map((d) => ({ value: String(d.Id), label: d.Name })), test: (p, v) => p.DepartmentId === Number(v) },
-    { key: "type", label: "Account type", options: lookups.userTypes.map((t) => ({ value: String(t.Id), label: t.Name })), test: (p, v) => p.UserTypeId === Number(v) },
-    { key: "status", label: "Status", options: [{ value: "on", label: "Active" }, { value: "off", label: "Off" }], test: (p, v) => (v === "on" ? p.IsActive : !p.IsActive) }
-  ], [lookups]);
-
-  const columns = useMemo(() => ({
-    name: (p) => p.DisplayName,
-    email: (p) => p.Email,
-    role: (p) => roleLabel(p, lookups),
-    department: (p) => p.DepartmentName || "",
-    type: (p) => p.UserTypeName,
-    status: (p) => (p.IsActive ? 0 : 1)
-  }), [lookups]);
-
-  const list = useListView({
-    listKey: "people",
-    tabs,
-    defaultTab: "active",
-    filters,
-    columns,
-    defaultSort: { key: "name", dir: "asc" },
-    search: (p) => `${p.DisplayName} ${p.Email} ${p.DepartmentName || ""}`
-  });
-  const rows = list.apply(people);
+  const def = useMemo(() => peopleList({ lookups }), [lookups]);
+  const list = useListView(def, { defaultSort: { key: "name", dir: "asc" } });
+  const rows = list.ready ? list.apply(people) : null;
 
   return (
     <>
       <div className="head-row">
-        <h1>{list.view ? list.view.Name : "People"}</h1>
+        <h1>People</h1>
         {rows && <span className="muted small">{rows.length} {rows.length === 1 ? "person" : "people"}</span>}
       </div>
       <ListTabs list={list} />

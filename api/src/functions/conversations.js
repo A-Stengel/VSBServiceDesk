@@ -4,7 +4,7 @@ const { getConnection, withTransaction, sql } = require("../shared/db");
 const { getSettings } = require("../shared/settings");
 const { saveAttachments, finishRichText, readInlineNames } = require("../shared/attachments");
 const { hasContent } = require("../shared/richtext");
-const { loadTicket, loadVisibleTicket, setStatus, forViewer, accessOf } = require("../shared/tickets");
+const { loadTicket, loadVisibleTicket, setStatus, getStatus, forViewer, accessOf } = require("../shared/tickets");
 const { replyAdded, ticketClosed } = require("../shared/notify");
 const { attachmentRoom } = require("../shared/mailer");
 
@@ -55,6 +55,9 @@ endpoint(
     let nextStatusId = null;
     if (user.IsTechnician) {
       nextStatusId = optionalId(data.statusId, "Status") || (isNote ? null : settings.AwaitingStatusId);
+      if (nextStatusId && optionalId(data.statusId, "Status") && (await getStatus(pool, nextStatusId)).IsClosed) {
+        throw new HttpError(400, "Use Close ticket to close it, so it gets a resolution");
+      }
     } else if (!asHr && ticket.IsWaitingOnRequester && settings.RequesterReplyStatusId) {
       nextStatusId = settings.RequesterReplyStatusId;
     }
@@ -88,5 +91,53 @@ endpoint(
     const after = await loadTicket(pool, id);
     if (after.IsClosed && !ticket.IsClosed) await ticketClosed(id, context);
     return { status: 201, jsonBody: { ticket: forViewer(after, user), warnings } };
+  }
+);
+
+// Close ticket: the only way a technician closes a ticket. It needs a
+// written resolution, saved as a technician-only entry in the conversation
+// (IsResolution), and then moves the ticket to the closed status. The closed
+// email and survey go out as usual when their switches are on.
+endpoint(
+  "closeTicket",
+  { methods: ["POST"], route: "tickets/{id:int}/close", role: "technician", failMessage: "Could not close the ticket" },
+  async (request, context, user) => {
+    const id = Number(request.params.id);
+    const { data, files } = await readBodyWithFiles(request);
+    const inlineNames = readInlineNames(data.inline);
+    const draft = typeof data.resolution === "string" ? data.resolution : "";
+    if (draft.length > MAX_MESSAGE) throw new HttpError(400, "The resolution is too long");
+    if (!hasContent(draft)) throw new HttpError(400, "Write the resolution");
+
+    const settings = await getSettings();
+    if (!settings.ClosedStatusId) throw new HttpError(500, "Set the status for Close ticket in Settings");
+    const pool = await getConnection();
+    const ticket = await loadTicket(pool, id);
+    if (!ticket) throw new HttpError(404, "Ticket not found");
+    if (ticket.IsClosed) throw new HttpError(400, "This ticket is already closed");
+
+    let warnings = [];
+    await withTransaction(async (tx) => {
+      const created = await tx
+        .request()
+        .input("TicketId", sql.Int, id)
+        .input("AuthorId", sql.Int, user.Id)
+        .query(`
+          INSERT INTO dbo.TicketConversations (TicketId, AuthorId, Body, IsTechnicianNote, IsResolution)
+          OUTPUT INSERTED.Id
+          VALUES (@TicketId, @AuthorId, N'', 1, 1)
+        `);
+      const conversationId = created.recordset[0].Id;
+      const saved = await saveAttachments(tx, id, conversationId, files, user.Id, inlineNames);
+      const body = await finishRichText(tx, id, draft, saved);
+      if (!body) throw new HttpError(400, "Write the resolution");
+      await tx.request().input("Id", sql.Int, conversationId).input("Body", sql.NVarChar(sql.MAX), body)
+        .query("UPDATE dbo.TicketConversations SET Body = @Body WHERE Id = @Id");
+      warnings = await setStatus(tx, await loadTicket(tx, id), settings.ClosedStatusId, user.Id);
+    });
+
+    await ticketClosed(id, context);
+    const after = await loadTicket(pool, id);
+    return { jsonBody: { ticket: forViewer(after, user), warnings } };
   }
 );

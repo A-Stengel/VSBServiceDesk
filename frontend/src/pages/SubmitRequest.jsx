@@ -56,6 +56,8 @@ export default function SubmitRequest() {
   const [softwareIds, setSoftwareIds] = useState([]);
   const [forUser, setForUser] = useState(start.person);
   const [requester, setRequester] = useState(null);
+  const [forColleague, setForColleague] = useState(false);
+  const [colleague, setColleague] = useState(null);
   const [files, setFiles] = useState([]);
   const [available, setAvailable] = useState(null);
   const [error, setError] = useState("");
@@ -74,6 +76,9 @@ export default function SubmitRequest() {
     [lookups, typeId, form.categoryId]
   );
   const field = (key) => fields.find((f) => f.FieldKey === key);
+  // Everyone but technicians (who use the Requester box) can ask for a
+  // coworker. Access & Equipment asks who it's for itself, so it's left out.
+  const canSubmitForColleague = !me.IsTechnician && !type?.UsesChecklist && !field("forUser") && !field("newHire") && !category?.ChecklistSource;
   const onboarding = category?.ChecklistSource === "onboarding";
   const showRemovals = !!field("removals");
   // Technicians can pick from anyone's holdings; staff only from their own
@@ -122,6 +127,10 @@ export default function SubmitRequest() {
       setError("Description is required.");
       return;
     }
+    if (canSubmitForColleague && forColleague && !colleague) {
+      setError("Pick who the request is for, or untick \"This is for someone else\".");
+      return;
+    }
     setSaving(true);
     try {
       const fields = {
@@ -131,7 +140,8 @@ export default function SubmitRequest() {
         softwareIds,
         forUserId: forUser?.Id,
         removals: showRemovals ? removals : undefined,
-        requesterId: requester?.Id
+        requesterId: requester?.Id,
+        onBehalfOfId: canSubmitForColleague && forColleague ? colleague?.Id : undefined
       };
       const { data, files: withImages } = withPastedImages(fields, "description", files);
       const result = await api.createTicket(data, withImages);
@@ -214,6 +224,25 @@ export default function SubmitRequest() {
                   {lookups.sources.map((s) => <option key={s.Id} value={s.Id}>{s.Name}</option>)}
                 </select>
               </label>
+            </fieldset>
+          )}
+
+          {canSubmitForColleague && (
+            <fieldset>
+              <legend>Who is it for?</legend>
+              <label className="check">
+                <input type="checkbox" checked={forColleague} onChange={(e) => setForColleague(e.target.checked)} />
+                This is for someone else
+              </label>
+              {forColleague && (
+                <>
+                  <label>
+                    Who is it for?
+                    <PersonPicker value={colleague} onChange={setColleague} />
+                  </label>
+                  <p className="muted small" style={{ margin: 0 }}>They become the requester and you&apos;re added to the CC line, so you both get the emails and can see the ticket.</p>
+                </>
+              )}
             </fieldset>
           )}
 

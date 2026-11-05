@@ -56,7 +56,7 @@ const SETTINGS_META = [
   { key: "AssignedStatusId", label: "Status when a New ticket gets a technician", type: "lookup", lookup: "statuses" },
   { key: "AwaitingStatusId", label: "Status after a technician replies", type: "lookup", lookup: "statuses" },
   { key: "RequesterReplyStatusId", label: "Status after the requester replies", type: "lookup", lookup: "statuses" },
-  { key: "ClosedStatusId", label: "Status for Move to Closure", type: "lookup", lookup: "statuses" },
+  { key: "ClosedStatusId", label: "Status for Close ticket", type: "lookup", lookup: "statuses" },
   { key: "DefaultPriorityId", label: "Default priority", type: "lookup", lookup: "priorities" },
   { key: "WebSourceId", label: "Source for tickets made in the app", type: "lookup", lookup: "sources" },
   { key: "DefaultRoleId", label: "Role for people signing in the first time", type: "lookup", lookup: "roles" },

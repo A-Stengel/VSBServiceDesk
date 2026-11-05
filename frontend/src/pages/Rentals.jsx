@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { api, formatDate, formatDay, formatWallRange, howLongAgo } from "../api.js";
 import { useApp } from "../App.jsx";
 import { ListTabs, ListToolbar, SortTh, useListView } from "../components/ListView.jsx";
+import { eventList } from "../lists.js";
 
 const day = (value) => (value ? formatDay(`${value.slice(0, 10)}T00:00:00Z`) : "");
 
@@ -19,69 +20,22 @@ export default function Rentals() {
   const equipment = !roles.eventManagerOnly;
   const stageName = (stage) => lookups.equipmentStatuses?.find((s) => s.Stage === stage);
 
-  const tabs = useMemo(() => {
-    const pending = lookups.defaults.bookingPendingStatusId;
-    const confirmed = lookups.defaults.bookingConfirmedStatusId;
-    const list = [{ key: "upcoming", label: roles.worker ? "All upcoming" : "Upcoming", when: "upcoming" }];
-    if (roles.worker || roles.admin) {
-      list.push(
-        { key: "pending", label: "Room pending", when: "upcoming", test: (r) => r.BookingStatusId === pending },
-        { key: "confirmed", label: "Room confirmed", when: "upcoming", test: (r) => r.BookingStatusId === confirmed }
-      );
-    }
-    if (roles.technician) list.push({ key: "out", label: "Equipment out", when: "all", test: (r) => r.EquipmentStage === "out" });
-    list.push({ key: "past", label: "Past", when: "past" });
-    return list;
-  }, [roles, lookups]);
-
-  const filters = useMemo(() => [
-    { key: "room", label: "Room", options: lookups.rooms.map((r) => ({ value: r.Name, label: r.Name })), test: (r, v) => r.RoomName === v },
-    { key: "roomStatus", label: "Room status", options: lookups.bookingStatuses.map((s) => ({ value: String(s.Id), label: s.Name })), test: (r, v) => r.BookingStatusId === Number(v) },
-    ...(equipment
-      ? [{
-          key: "equipment",
-          label: "Equipment status",
-          options: [
-            { value: "none", label: "No equipment" },
-            ...["requested", "out", "returned"].map((stage) => ({ value: stage, label: stageName(stage)?.Name || stage }))
-          ],
-          test: (r, v) => r.EquipmentStage === v
-        }]
-      : [])
-  ], [lookups, equipment]);
-
-  const columns = useMemo(() => ({
-    title: (r) => r.Title,
-    when: (r) => r.StartAt,
-    room: (r) => r.RoomName || "",
-    roomStatus: (r) => r.RoomStatusName || "",
-    equipment: (r) => r.EquipmentStage,
-    requester: (r) => r.RequesterName,
-    activity: (r) => r.UpdatedAt
-  }), []);
-
-  const list = useListView({
-    listKey: "events",
-    tabs,
-    defaultTab: "upcoming",
-    filters,
-    columns,
-    search: (r) => `${r.Title} ${r.RoomName || ""} ${r.RequesterName} ${r.Items || ""} ${r.TicketNumber || ""}`
-  });
-  const when = tabs.find((t) => t.key === list.tab)?.when || "upcoming";
+  const def = useMemo(() => eventList({ roles, lookups }), [roles, lookups]);
+  const list = useListView(def);
+  const when = list.base?.when || "upcoming";
 
   useEffect(() => {
     if (data[when]) return;
     api.rentals({ scope, when }).then((rows) => setData((d) => ({ ...d, [when]: rows }))).catch((e) => setError(e.message));
   }, [when, scope, data]);
 
-  const rows = list.apply(data[when]);
+  const rows = list.ready ? list.apply(data[when]) : null;
   const title = roles.eventManagerOnly ? "Event bookings" : roles.worker ? "Rentals & Events" : "My rentals & events";
 
   return (
     <>
       <div className="head-row">
-        <h1>{list.view ? list.view.Name : title}</h1>
+        <h1>{title}</h1>
         <div className="row center">
           {rows && <span className="muted small">{rows.length} request{rows.length === 1 ? "" : "s"}</span>}
           <Link className="btn pri sm" to="/events/new">New rental or booking</Link>

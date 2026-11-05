@@ -67,8 +67,13 @@ export const api = {
 
   views: (list) => request("GET", "views" + query({ list })),
   createView: (data) => request("POST", "views", data),
+  updateView: (id, data) => request("PATCH", `views/${id}`, data),
   deleteView: (id) => request("DELETE", `views/${id}`),
-  sharedViews: () => request("GET", "manage/shared-views"),
+  orderViews: (list, ids) => request("PUT", "views/order", { list, ids }),
+  resetViews: (list) => request("POST", "views/reset", { list }),
+  defaultTabs: (list, audience) => request("GET", "manage/default-tabs" + query({ list, audience })),
+  saveDefaultTabs: (list, audience, tabs) => request("PUT", "manage/default-tabs", { list, audience, tabs }),
+  setDepartmentTickets: (on) => request("PUT", "me/department-tickets", { on }),
 
   inventory: () => request("GET", "inventory"),
   addInventory: (kind, data) => request("POST", `inventory/${kind}`, data),
@@ -93,6 +98,7 @@ export const api = {
   createTicket: (data, files) => request("POST", "tickets", withFiles(data, files)),
   updateTicket: (id, data) => request("PATCH", `tickets/${id}`, data),
   addConversation: (id, data, files) => request("POST", `tickets/${id}/conversations`, withFiles(data, files)),
+  closeTicket: (id, data, files) => request("POST", `tickets/${id}/close`, withFiles(data, files)),
   mergeTicket: (id, intoId) => request("POST", `tickets/${id}/merge`, { intoId }),
   heldMail: () => request("GET", "mail/held"),
   acceptHeldMail: (id) => request("POST", `mail/held/${id}/accept`),

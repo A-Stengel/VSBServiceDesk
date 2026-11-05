@@ -75,10 +75,10 @@ export default function TicketPage() {
         <ReplyBox ticket={ticket} access={access} onSaved={load} />
 
         {data.conversations.map((c) => (
-          <div key={c.Id} className={`card message ${c.IsTechnicianNote ? "note" : c.Direction === "out" ? "out" : ""}`}>
+          <div key={c.Id} className={`card message ${c.IsResolution ? "resolution" : c.IsTechnicianNote ? "note" : c.Direction === "out" ? "out" : ""}`}>
             <div className="meta">
               <strong>{c.AuthorName}</strong> · {formatDate(c.CreatedAt)}
-              {c.IsTechnicianNote && ` · ${noteLabel(c)}`}
+              {c.IsResolution ? " · Resolution (only technicians see this)" : c.IsTechnicianNote && ` · ${noteLabel(c)}`}
               {c.CameByEmail === 1 && " · by email"}
               {c.MergedFromTicketId && <> · merged from <Link className="link" to={`/tickets/${c.MergedFromTicketId}`}>#{String(c.MergedFromTicketId).padStart(7, "0")}</Link></>}
               {!c.IsTechnicianNote && c.Direction === "out" && c.EmailedAt && " · Emailed"}
@@ -99,6 +99,9 @@ export default function TicketPage() {
             <p style={{ margin: 0 }}><strong>{data.survey.Rating} of 5</strong> <span className="muted small">· {formatDate(data.survey.AnsweredAt)}</span></p>
             {data.survey.Comment && <p style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}>{data.survey.Comment}</p>}
           </div>
+        )}
+        {isTech && !ticket.IsClosed && !ticket.MergedIntoId && !(ticket.HasRoom && !ticket.HasEquipment) && (
+          <TicketActions ticket={ticket} onSaved={load} />
         )}
         {isTech ? <TechnicianPanel ticket={ticket} onSaved={load} />
           : !hrView && !(ticket.HasRoom && !ticket.HasEquipment) && <RequesterPanel ticket={ticket} />}
@@ -317,7 +320,7 @@ function ReplyBox({ ticket, access, onSaved }) {
           Then set status to
           <select value={statusId} onChange={(e) => setStatusId(e.target.value)}>
             <option value="">{isNote ? "Leave as is" : "Awaiting User Response (default)"}</option>
-            {lookups.statuses.map((s) => <option key={s.Id} value={s.Id}>{s.Name}</option>)}
+            {lookups.statuses.filter((s) => !s.IsClosed).map((s) => <option key={s.Id} value={s.Id}>{s.Name}</option>)}
           </select>
         </label>
       )}
@@ -375,14 +378,6 @@ function TechnicianPanel({ ticket, onSaved }) {
     }
   }
 
-  function close() {
-    const { closed, survey } = lookups.email || {};
-    const told = ticket.HasRoom && !ticket.HasEquipment ? ""
-      : closed || survey ? `The ${[closed && "closed email", survey && "survey"].filter(Boolean).join(" and ")} go${closed && survey ? "" : "es"} to the requester.`
-      : "No closed email or survey goes out while they're switched off.";
-    save({ statusId: lookups.defaults.closedStatusId }, `Ticket ${ticket.Number} closed. ${told}`);
-  }
-
   const select = (label, key, list, value, allowEmpty) => (
     <label>
       {label}
@@ -405,7 +400,8 @@ function TechnicianPanel({ ticket, onSaved }) {
   return (
     <div className="card form">
       {select("Assigned to", "technicianId", technicians, ticket.TechnicianId, true)}
-      {select("Status", "statusId", lookups.statuses, ticket.StatusId)}
+      {select("Status", "statusId", lookups.statuses.filter((s) => !s.IsClosed || s.Id === ticket.StatusId), ticket.StatusId)}
+      {ticket.IsClosed && <p className="muted small" style={{ margin: "-8px 0 0" }}>Pick another status to reopen it.</p>}
       {select("Priority", "priorityId", lookups.priorities, ticket.PriorityId)}
       <label>
         Type
@@ -448,9 +444,158 @@ function TechnicianPanel({ ticket, onSaved }) {
         <div><dt>Created</dt><dd>{formatDate(ticket.CreatedAt)}</dd></div>
       </dl>
       {error && <p className="error">{error}</p>}
-      {!ticket.IsClosed && <button type="button" className="btn pri block" onClick={close}>Move to closure</button>}
       {ticket.ClosedAt && <p className="muted small">Closed {formatDate(ticket.ClosedAt)}</p>}
       {!ticket.MergedIntoId && !ticket.HasRoom && <MergeBox ticket={ticket} />}
+    </div>
+  );
+}
+
+// The top of the side panel for technicians. An unassigned ticket shows Pick
+// up: it asks for any of Category, Subcategory and Department that are blank
+// (and have choices), then assigns the ticket to you, which moves a New
+// ticket on. Once it's assigned it shows Close ticket, which asks for a
+// written resolution (technicians only see it) and closes the ticket. That's
+// the only way to close one by hand.
+function TicketActions({ ticket, onSaved }) {
+  const { me, lookups, notify } = useApp();
+  const [dialog, setDialog] = useState(null);
+  const categories = lookups.categories.filter((c) => c.TicketTypeId === ticket.TicketTypeId && c.IsActive !== false);
+  const missing = [
+    !ticket.CategoryId && categories.length > 0 && "category",
+    !ticket.SubcategoryId && ticket.CategoryId && lookups.subcategories.some((s) => s.CategoryId === ticket.CategoryId) && "subcategory",
+    !ticket.DepartmentId && lookups.departments.length > 0 && "department"
+  ].filter(Boolean);
+
+  async function pickUp(extra = {}) {
+    const result = await api.updateTicket(ticket.Id, { ...extra, technicianId: me.Id });
+    notify([`You picked up ticket ${ticket.Number}.`, ...(result.warnings || [])].join(" "));
+    setDialog(null);
+    onSaved();
+  }
+
+  return (
+    <div className="card">
+      {!ticket.TechnicianId ? (
+        <button type="button" className="btn pri block"
+          onClick={() => (missing.length ? setDialog("pickup") : pickUp().catch((e) => notify(e.message, true)))}>
+          Pick up
+        </button>
+      ) : (
+        <button type="button" className="btn pri block" onClick={() => setDialog("close")}>Close ticket</button>
+      )}
+      {dialog === "pickup" && <PickUpDialog ticket={ticket} missing={missing} onPickUp={pickUp} onCancel={() => setDialog(null)} />}
+      {dialog === "close" && <CloseDialog ticket={ticket} onCancel={() => setDialog(null)} onClosed={() => { setDialog(null); onSaved(); }} />}
+    </div>
+  );
+}
+
+function PickUpDialog({ ticket, missing, onPickUp, onCancel }) {
+  const { lookups } = useApp();
+  const [form, setForm] = useState({ categoryId: ticket.CategoryId || "", subcategoryId: ticket.SubcategoryId || "", departmentId: ticket.DepartmentId || "" });
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const categories = lookups.categories.filter((c) => c.TicketTypeId === ticket.TicketTypeId && c.IsActive !== false);
+  const subcategories = lookups.subcategories.filter((s) => s.CategoryId === Number(form.categoryId) && s.IsActive !== false);
+  const asks = (key) => missing.includes(key) || (key === "subcategory" && missing.includes("category"));
+  const needsSub = asks("subcategory") && subcategories.length > 0;
+  const ready = (!asks("category") || form.categoryId) && (!needsSub || form.subcategoryId) && (!asks("department") || form.departmentId);
+
+  async function submit(e) {
+    e.preventDefault();
+    setSaving(true);
+    setError("");
+    const changes = {};
+    if (asks("category")) changes.categoryId = Number(form.categoryId);
+    if (needsSub) changes.subcategoryId = Number(form.subcategoryId);
+    if (asks("department")) changes.departmentId = Number(form.departmentId);
+    try {
+      await onPickUp(changes);
+    } catch (err) {
+      setError(err.message);
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="dialog-backdrop" onClick={onCancel}>
+      <form className="card form dialog" onClick={(e) => e.stopPropagation()} onSubmit={submit}>
+        <h2 style={{ margin: 0 }}>Pick up ticket {ticket.Number}</h2>
+        <p className="muted small" style={{ margin: 0 }}>Fill in what&apos;s missing, then it&apos;s assigned to you.</p>
+        {asks("category") && (
+          <label>
+            Category
+            <select value={form.categoryId} onChange={(e) => setForm({ ...form, categoryId: e.target.value, subcategoryId: "" })} autoFocus>
+              <option value="">Choose</option>
+              {categories.map((c) => <option key={c.Id} value={c.Id}>{c.Name}</option>)}
+            </select>
+          </label>
+        )}
+        {needsSub && (
+          <label>
+            Subcategory
+            <select value={form.subcategoryId} onChange={(e) => setForm({ ...form, subcategoryId: e.target.value })}>
+              <option value="">Choose</option>
+              {subcategories.map((c) => <option key={c.Id} value={c.Id}>{c.Name}</option>)}
+            </select>
+          </label>
+        )}
+        {asks("department") && (
+          <label>
+            Department
+            <select value={form.departmentId} onChange={(e) => setForm({ ...form, departmentId: e.target.value })}>
+              <option value="">Choose</option>
+              {lookups.departments.map((d) => <option key={d.Id} value={d.Id}>{d.Name}</option>)}
+            </select>
+          </label>
+        )}
+        {error && <p className="error">{error}</p>}
+        <div className="row">
+          <button className="btn pri" disabled={!ready || saving}>{saving ? "Picking up…" : "Pick up"}</button>
+          <button type="button" className="btn" onClick={onCancel}>Cancel</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function CloseDialog({ ticket, onCancel, onClosed }) {
+  const { lookups, notify } = useApp();
+  const [resolution, setResolution] = useState("");
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const { closed, survey } = lookups.email || {};
+  const told = closed || survey
+    ? `The ${[closed && "closed email", survey && "survey"].filter(Boolean).join(" and ")} go${closed && survey ? "" : "es"} to the requester.`
+    : "No closed email or survey goes out while they're switched off.";
+
+  async function submit(e) {
+    e.preventDefault();
+    setSaving(true);
+    setError("");
+    try {
+      const { data, files } = withPastedImages({ resolution }, "resolution");
+      const result = await api.closeTicket(ticket.Id, data, files);
+      notify([`Ticket ${ticket.Number} closed. ${told}`, ...(result.warnings || [])].join(" "));
+      onClosed();
+    } catch (err) {
+      setError(err.message);
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="dialog-backdrop" onClick={onCancel}>
+      <form className="card form dialog resolution" onClick={(e) => e.stopPropagation()} onSubmit={submit}>
+        <h2 style={{ margin: 0 }}>Close ticket {ticket.Number}</h2>
+        <RichEditor value={resolution} onChange={setResolution} images label="Resolution"
+          placeholder="What was the problem and what fixed it? Only technicians see this." onError={setError} />
+        <p className="muted small" style={{ margin: 0 }}>{told}</p>
+        {error && <p className="error">{error}</p>}
+        <div className="row">
+          <button className="btn pri" disabled={saving || !hasContent(resolution)}>{saving ? "Closing…" : "Close ticket"}</button>
+          <button type="button" className="btn" onClick={onCancel}>Cancel</button>
+        </div>
+      </form>
     </div>
   );
 }

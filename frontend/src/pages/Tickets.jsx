@@ -4,92 +4,66 @@ import { api } from "../api.js";
 import { useApp } from "../App.jsx";
 import TicketTable from "../components/TicketTable.jsx";
 import { ListTabs, ListToolbar, useListView } from "../components/ListView.jsx";
+import { ticketList } from "../lists.js";
 
-const PEOPLE_KINDS = ["onboarding", "offboarding"];
-
-// Every ticket list in one page: your own tickets for everyone, and the IT
-// queue tabs for technicians. Each tab says which tickets it loads (scope
-// and state) and which of those it shows.
+// Every ticket list in one page. The tabs are the person's own (see
+// ListView.jsx); each one says which tickets it loads (mine or the whole
+// queue, open or closed) and which of those it shows. Department managers can
+// switch on their departments' tickets, which joins them to "my" tickets.
 export default function Tickets() {
-  const { me, roles, lookups } = useApp();
+  const { me, roles, lookups, notify } = useApp();
   const [data, setData] = useState({});
   const [technicians, setTechnicians] = useState([]);
   const [held, setHeld] = useState(0);
   const [error, setError] = useState("");
+  const [showDepartments, setShowDepartments] = useState(!!me.ShowDepartmentTickets);
+  const manager = (me.ManagedDepartmentIds || []).length > 0;
 
-  const tabs = useMemo(() => {
-    const mine = { scope: "mine", state: "open" };
-    const queue = { scope: "queue", state: "open" };
-    const list = [
-      { key: "mine", label: "My open", ...mine },
-      { key: "waitingOnMe", label: "Waiting on me", ...mine, test: (t) => t.IsWaitingOnRequester && t.RequesterId === me.Id },
-      { key: "myClosed", label: "My closed", scope: "mine", state: "closed" }
-    ];
-    if (roles.technician) {
-      list.push(
-        { key: "all", label: "All open", ...queue },
-        { key: "unassigned", label: "Unassigned", ...queue, test: (t) => !t.TechnicianId },
-        { key: "assigned", label: "Assigned to me", ...queue, test: (t) => t.TechnicianId === me.Id },
-        { key: "waiting", label: "Waiting on requester", ...queue, test: (t) => t.IsWaitingOnRequester },
-        { key: "people", label: "Onboarding and offboarding", ...queue, test: (t) => PEOPLE_KINDS.includes(t.ChecklistSource) },
-        { key: "closed", label: "Closed", scope: "queue", state: "closed" }
-      );
-    }
-    return list;
-  }, [me.Id, roles.technician]);
-
-  const filters = useMemo(() => [
-    { key: "status", label: "Status", options: lookups.statuses.map((s) => ({ value: String(s.Id), label: s.Name })), test: (t, v) => t.StatusId === Number(v) },
-    { key: "priority", label: "Priority", options: lookups.priorities.map((p) => ({ value: String(p.Id), label: p.Name })), test: (t, v) => t.PriorityId === Number(v) },
-    ...(roles.technician
-      ? [{
-          key: "assigned",
-          label: "Assigned to",
-          options: [{ value: "none", label: "Unassigned" }, ...technicians.map((t) => ({ value: String(t.Id), label: t.DisplayName }))],
-          test: (t, v) => (v === "none" ? !t.TechnicianId : t.TechnicianId === Number(v))
-        }]
-      : []),
-    { key: "type", label: "Type", options: lookups.ticketTypes.map((t) => ({ value: String(t.Id), label: t.Name })), test: (t, v) => t.TicketTypeId === Number(v) }
-  ], [lookups, technicians, roles.technician]);
-
-  const columns = useMemo(() => ({
-    number: (t) => t.Id,
-    subject: (t) => t.Subject,
-    type: (t) => t.TicketTypeName,
-    assigned: (t) => t.TechnicianName || "",
-    requester: (t) => t.RequesterName,
-    status: (t) => t.StatusName,
-    priority: (t) => t.PriorityRank,
-    created: (t) => t.CreatedAt,
-    activity: (t) => t.UpdatedAt,
-    department: (t) => t.DepartmentName || ""
-  }), []);
-
-  const list = useListView({
-    listKey: "tickets",
-    tabs,
-    defaultTab: "mine",
-    filters,
-    columns,
-    search: (t) => `${t.Number} ${t.Subject} ${t.RequesterName} ${t.RequesterEmail} ${t.ForUserName || ""} ${t.ForPersonName || ""}`
-  });
-  const tab = tabs.find((t) => t.key === list.tab);
-  const fetchKey = `${tab.scope}:${tab.state}`;
+  const def = useMemo(() => ticketList({ me, roles, lookups, technicians }), [me, roles, lookups, technicians]);
+  const list = useListView(def, { defaultSort: null });
+  const base = list.base || def.bases[0];
+  const departments = manager && showDepartments && base.scope === "mine";
+  const fetchKey = `${base.scope}:${base.state}:${departments ? 1 : 0}`;
 
   useEffect(() => {
     if (!roles.technician) return;
     api.users({ technicians: 1 }).then(setTechnicians).catch(() => {});
-    api.heldMail().then((list) => setHeld(list.length)).catch(() => {});
+    api.heldMail().then((rows) => setHeld(rows.length)).catch(() => {});
   }, [roles.technician]);
 
   useEffect(() => {
     if (data[fetchKey]) return;
-    const [scope, state] = fetchKey.split(":");
-    api.tickets({ scope, state }).then((rows) => setData((d) => ({ ...d, [fetchKey]: rows }))).catch((e) => setError(e.message));
-  }, [fetchKey, data]);
+    api.tickets({ scope: base.scope, state: base.state, departments: departments ? 1 : undefined })
+      .then((rows) => setData((d) => ({ ...d, [fetchKey]: rows })))
+      .catch((e) => setError(e.message));
+  }, [fetchKey, data, base.scope, base.state, departments]);
 
-  const rows = list.apply(data[fetchKey]);
-  const title = list.view ? list.view.Name : tab.scope === "queue" ? "Tickets" : "My tickets";
+  async function toggleDepartments(on) {
+    setShowDepartments(on);
+    try {
+      await api.setDepartmentTickets(on);
+    } catch (err) {
+      notify(err.message, true);
+    }
+  }
+
+  const departmentName = (id) => lookups.departments.find((d) => d.Id === id)?.Name;
+  const tagged = useMemo(() => {
+    const rows = data[fetchKey];
+    if (!rows || !departments) return rows;
+    const email = String(me.Email || "").toLowerCase();
+    const managed = me.ManagedDepartmentIds || [];
+    return rows.map((t) => {
+      const mine = t.RequesterId === me.Id || t.ForUserId === me.Id || String(t.CcEmails || "").toLowerCase().split(",").includes(email);
+      if (mine) return t;
+      const dept = [t.RequesterDepartmentId, t.ForUserDepartmentId, t.ForDepartmentId].find((d) => d && managed.includes(d));
+      return { ...t, DepartmentTag: departmentName(dept) || "Your department" };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, fetchKey, departments, me]);
+
+  const rows = list.apply(tagged);
+  const title = base.scope === "queue" ? "Tickets" : "My tickets";
 
   return (
     <>
@@ -102,9 +76,20 @@ export default function Tickets() {
         </div>
       </div>
       <ListTabs list={list} />
-      <ListToolbar list={list} placeholder="Search number, title or requester" />
+      <ListToolbar list={list} placeholder="Search number, title or requester">
+        {manager && base.scope === "mine" && (
+          <label className="check dept-switch">
+            <input type="checkbox" checked={showDepartments} onChange={(e) => toggleDepartments(e.target.checked)} />
+            Show my departments&apos; tickets
+          </label>
+        )}
+      </ListToolbar>
       {error && <p className="error">{error}</p>}
-      {rows ? <TicketTable tickets={rows} list={list} technician={roles.technician} /> : <p className="muted">Loading…</p>}
+      {list.error && <p className="error">{list.error}</p>}
+      {rows && list.ready ? <TicketTable tickets={rows} list={list} technician={roles.technician} /> : <p className="muted">Loading…</p>}
+      {departments && (
+        <p className="muted small">Tickets tagged with a department are from people in departments you manage. You can open them and reply.</p>
+      )}
     </>
   );
 }
