@@ -20,9 +20,11 @@ const { TICKET_SELECT, withNumber, recordEvents } = require("../shared/tickets")
 
 const PEOPLE_SELECT = `
   SELECT x.*, ut.Name AS UserTypeName, d.Name AS DepartmentName,
+         pu.DisplayName AS SavedDisplayName, pu.JobTitle, pu.Phone,
          (SELECT STRING_AGG(CAST(m.DepartmentId AS NVARCHAR(20)), ',')
           FROM dbo.DepartmentManagers m WHERE m.UserId = x.Id) AS ManagedDepartmentIds
   FROM (${USER_SELECT}) x
+  JOIN dbo.Users pu ON pu.Id = x.Id
   LEFT JOIN dbo.UserTypes ut ON ut.Id = x.UserTypeId
   LEFT JOIN dbo.Departments d ON d.Id = x.DepartmentId
 `;
@@ -201,17 +203,17 @@ endpoint(
   }
 );
 
-// Technicians set someone's department. Admins also change their role (staff
-// accounts only), the departments they manage, their type and name. An
-// account is turned off and on by closing an Off Boarding or Onboarding
-// ticket, not here.
+// Technicians set someone's department and edit their profile (name, email,
+// job title, phone). Admins also change their role (staff accounts only), the
+// departments they manage and their type. An account is turned off and on by
+// closing an Off Boarding or Onboarding ticket, not here.
 endpoint(
   "updateUser",
   { methods: ["PATCH"], route: "users/{id:int}", role: "technician", failMessage: "Could not save the person" },
   async (request, context, me) => {
     const id = Number(request.params.id);
     const body = await readJson(request);
-    const adminOnly = ["roleId", "userTypeId", "firstName", "lastName", "displayName", "isActive", "managedDepartmentIds"];
+    const adminOnly = ["roleId", "userTypeId", "isActive", "managedDepartmentIds"];
     if (!me.IsAdmin && adminOnly.some((key) => key in body)) throw new HttpError(403, "Only admins can change that");
     const sets = [];
     const inputs = [];
@@ -225,6 +227,13 @@ endpoint(
     if ("firstName" in body) add("FirstName", sql.NVarChar(100), requiredText(body.firstName, "First name", 100));
     if ("lastName" in body) add("LastName", sql.NVarChar(100), optionalText(body.lastName, "Last name", 100) || "");
     if ("displayName" in body) add("DisplayName", sql.NVarChar(200), optionalText(body.displayName, "Display name", 200));
+    if ("jobTitle" in body) add("JobTitle", sql.NVarChar(150), optionalText(body.jobTitle, "Job title", 150));
+    if ("phone" in body) add("Phone", sql.NVarChar(50), optionalText(body.phone, "Phone", 50));
+    if ("email" in body) {
+      const email = requiredText(body.email, "Email", 320).toLowerCase();
+      if (!EMAIL_PATTERN.test(email)) throw new HttpError(400, "Enter a full email address, like name@example.org");
+      add("Email", sql.NVarChar(320), email);
+    }
     if ("isActive" in body) add("IsActive", sql.Bit, !!body.isActive);
     if (id === me.Id && (("isActive" in body && !body.isActive) || "roleId" in body)) {
       throw new HttpError(400, "You can't change your own role or switch yourself off");
@@ -241,6 +250,15 @@ endpoint(
         const before = await loadPerson(tx, id);
         if ("roleId" in body && before.UserTypeId !== settings.StaffUserTypeId) {
           throw new HttpError(400, "Only staff accounts can have a role. Outside people and shared mailboxes use email only.");
+        }
+        if ("email" in body) {
+          const email = inputs.find(([column]) => column === "Email")[2];
+          const taken = await tx
+            .request()
+            .input("Id", sql.Int, id)
+            .input("Email", sql.NVarChar(320), email)
+            .query("SELECT TOP (1) Id FROM dbo.Users WHERE Email = @Email AND Id <> @Id");
+          if (taken.recordset.length) throw new HttpError(409, "Another person already uses this email. Each email can belong to only one person.");
         }
         if (sets.length) {
           const req = tx.request().input("Id", sql.Int, id);
@@ -268,7 +286,19 @@ endpoint(
         if (before.RoleName !== after.RoleName) notes.push(`Role: ${before.RoleName || "none"} to ${after.RoleName || "none"}`);
         if (before.DepartmentName !== after.DepartmentName) notes.push(`Department: ${before.DepartmentName || "none"} to ${after.DepartmentName || "none"}`);
         if (before.UserTypeName !== after.UserTypeName) notes.push(`Account type: ${before.UserTypeName} to ${after.UserTypeName}`);
-        if (before.DisplayName !== after.DisplayName) notes.push(`Name: ${before.DisplayName} to ${after.DisplayName}`);
+        const fields = [
+          ["FirstName", "First name"],
+          ["LastName", "Last name"],
+          ["SavedDisplayName", "Display name"],
+          ["Email", "Email"],
+          ["JobTitle", "Job title"],
+          ["Phone", "Phone"]
+        ];
+        for (const [column, label] of fields) {
+          if ((before[column] || "") !== (after[column] || "")) {
+            notes.push(`${label}: ${before[column] || "none"} to ${after[column] || "none"}`);
+          }
+        }
         if (before.IsActive !== after.IsActive) notes.push(after.IsActive ? "Account turned on" : "Account turned off");
         const sameManaged = before.ManagedDepartmentIds.length === after.ManagedDepartmentIds.length &&
           before.ManagedDepartmentIds.every((d) => after.ManagedDepartmentIds.includes(d));
@@ -282,6 +312,7 @@ endpoint(
       });
     } catch (error) {
       if (isForeignKeyViolation(error)) throw new HttpError(400, "That role, department or user type doesn't exist");
+      if (isUniqueViolation(error)) throw new HttpError(409, "Another person already uses this email. Each email can belong to only one person.");
       throw error;
     }
     const pool = await getConnection();
