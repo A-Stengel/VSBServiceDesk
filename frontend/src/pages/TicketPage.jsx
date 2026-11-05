@@ -55,7 +55,7 @@ export default function TicketPage() {
               : <span className="pill" style={{ background: ticket.StatusColor || undefined }}>{ticket.StatusName}</span>}
             {hrView && ticket.IsClosed && <span className="pill">Closed</span>}
             <span className="muted small">
-              {ticket.RequesterName} ({ticket.RequesterEmail}) · {formatDate(ticket.CreatedAt)}{hrView ? "" : ` · via ${ticket.SourceName}`}
+              {ticket.RequesterName}{ticket.RequesterEmail ? ` (${ticket.RequesterEmail})` : ""} · {formatDate(ticket.CreatedAt)}{hrView || !ticket.SourceName ? "" : ` · via ${ticket.SourceName}`}
             </span>
           </div>
           {editing ? (
