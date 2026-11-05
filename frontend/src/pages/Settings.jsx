@@ -1028,11 +1028,6 @@ function SoftwareSettings({ onChange }) {
                         onChange={(e) => run(api.adminUpdateLookup("applications", a.Id, { IsActive: e.target.checked }), e.target.checked ? `${a.Name} is on the form.` : `${a.Name} is hidden from the form.`)} />
                       Show on the Onboarding form
                     </label>
-                    <label className="check">
-                      <input type="checkbox" checked={!!a.IsImis}
-                        onChange={(e) => run(api.adminUpdateLookup("applications", a.Id, { IsImis: e.target.checked }), "Saved.")} />
-                      This is iMIS (IT sets module levels, roles and groups)
-                    </label>
                   </fieldset>
 
                   <fieldset>
