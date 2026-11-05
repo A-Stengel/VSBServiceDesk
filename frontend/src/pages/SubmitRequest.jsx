@@ -4,6 +4,7 @@ import { api, money, perPeriod } from "../api.js";
 import { useApp } from "../App.jsx";
 import PersonPicker from "../components/PersonPicker.jsx";
 import ItemsPicker from "../components/ItemsPicker.jsx";
+import OnboardingFields, { emptyOnboarding, onboardingBody, printerLabel } from "../components/OnboardingFields.jsx";
 import RichEditor from "../components/RichEditor.jsx";
 import { hasContent, plainToRich, withPastedImages } from "../richtext.js";
 
@@ -15,7 +16,8 @@ import { hasContent, plainToRich, withPastedImages } from "../richtext.js";
 // Links can pick the type (?type=support or ?type=access, plus &kind=
 // onboarding, change or offboarding), and the People page opens it prefilled
 // through the navigation state: { prefill: { type, kind, subject,
-// description, person, newHireName } }.
+// description, person, newHire: { firstName, lastName, displayName,
+// departmentId } } }.
 const TYPE_DESCRIPTIONS = {
   "Support": "Something is broken or you have a question",
   "Access & Equipment": "Onboarding, changes, off boarding",
@@ -37,10 +39,10 @@ function startingPoint(lookups, params, state) {
       description: plainToRich(prefill.description || ""),
       priorityId: lookups.defaults.defaultPriorityId || "",
       cc: "",
-      categoryId: category ? String(category.Id) : "",
-      newHireName: prefill.newHireName || ""
+      categoryId: category ? String(category.Id) : ""
     },
-    person: prefill.person || null
+    person: prefill.person || null,
+    newHire: prefill.newHire || {}
   };
 }
 
@@ -54,6 +56,9 @@ export default function SubmitRequest() {
   const [form, setForm] = useState(start.form);
   const [items, setItems] = useState([]);
   const [softwareIds, setSoftwareIds] = useState([]);
+  const [onboardingForm, setOnboardingForm] = useState(() => emptyOnboarding(start.newHire));
+  const [printerSearch, setPrinterSearch] = useState("");
+  const [inkIds, setInkIds] = useState([]);
   const [forUser, setForUser] = useState(start.person);
   const [requester, setRequester] = useState(null);
   const [forColleague, setForColleague] = useState(false);
@@ -64,7 +69,7 @@ export default function SubmitRequest() {
   const [saving, setSaving] = useState(false);
   const [newPerson, setNewPerson] = useState(null);
   const [holdings, setHoldings] = useState(null);
-  const [removals, setRemovals] = useState({ seatIds: [], ticketItemIds: [] });
+  const [removals, setRemovals] = useState({ seatIds: [], ticketItemIds: [], accessIds: [] });
 
   const type = lookups.ticketTypes.find((t) => t.Id === Number(typeId));
   const categories = lookups.categories.filter((c) => c.TicketTypeId === Number(typeId));
@@ -83,24 +88,25 @@ export default function SubmitRequest() {
   const showRemovals = !!field("removals");
   // Technicians can pick from anyone's holdings; staff only from their own
   const canSeeHoldings = forUser && (me.IsTechnician || forUser.Id === me.Id);
-  const showItems = !!field("items") || onboarding;
-  const showSoftware = !!field("software") || onboarding;
+  // Onboarding has its own equipment and software pickers
+  const showItems = !!field("items") && !onboarding;
+  const showSoftware = !!field("software") && !onboarding;
+  const showNewHire = onboarding && !!field("newHire");
+  const subcategory = lookups.subcategories.find((s) => s.Id === Number(form.subcategoryId));
+  const asksForInk = !!subcategory?.AsksForInk;
+  // Onboarding and low ink tickets write their own subject and description
+  const autoText = showNewHire || asksForInk;
   const set = (key) => (e) => setForm({ ...form, [key]: e.target.value });
 
-  // Onboarding starts with the global defaults ticked
-  useEffect(() => {
-    if (onboarding) {
-      setItems(lookups.inventoryItems.filter((i) => i.IsDefaultForOnboarding).map((i) => ({ inventoryItemId: i.Id, quantity: 1 })));
-      setSoftwareIds(lookups.software.filter((s) => s.IsDefaultForOnboarding).map((s) => s.Id));
-    } else {
-      setItems([]);
-      setSoftwareIds([]);
-    }
-  }, [onboarding, lookups]);
+  // Low ink: which printer, and which of its cartridges are low
+  const printers = lookups.printers || [];
+  const shownPrinters = printers.filter((p) => printerLabel(p).toLowerCase().includes(printerSearch.trim().toLowerCase()));
+  const printerInk = (lookups.printerInk || []).filter((c) => c.PrinterId === Number(form.printerId));
+  useEffect(() => { setInkIds([]); }, [form.printerId]);
 
   // What the person holds, for "to remove"
   useEffect(() => {
-    setRemovals({ seatIds: [], ticketItemIds: [] });
+    setRemovals({ seatIds: [], ticketItemIds: [], accessIds: [] });
     if (!showRemovals || !canSeeHoldings) return setHoldings(null);
     api.holdings(forUser.Id).then(setHoldings).catch(() => setHoldings(null));
   }, [showRemovals, canSeeHoldings, forUser]);
@@ -123,8 +129,16 @@ export default function SubmitRequest() {
   async function submit(e) {
     e.preventDefault();
     setError("");
-    if (!hasContent(form.description)) {
+    if (!autoText && !hasContent(form.description)) {
       setError("Description is required.");
+      return;
+    }
+    if (asksForInk && !form.printerId) {
+      setError("Pick the printer that's low on ink.");
+      return;
+    }
+    if (asksForInk && printerInk.length && !inkIds.length) {
+      setError("Pick which colors are low.");
       return;
     }
     if (canSubmitForColleague && forColleague && !colleague) {
@@ -138,6 +152,9 @@ export default function SubmitRequest() {
         ticketTypeId: Number(typeId),
         items,
         softwareIds,
+        ...(onboarding ? onboardingBody(onboardingForm, showNewHire) : {}),
+        printerId: asksForInk ? Number(form.printerId) : undefined,
+        inkCartridgeIds: asksForInk ? inkIds : undefined,
         forUserId: forUser?.Id,
         removals: showRemovals ? removals : undefined,
         requesterId: requester?.Id,
@@ -168,7 +185,7 @@ export default function SubmitRequest() {
     // Equipment Rental and Event Booking share one form
     if (t.Id === lookups.defaults.bookingTicketTypeId) return navigate("/events/new");
     setTypeId(String(t.Id));
-    setForm({ ...form, categoryId: "", subcategoryId: "" });
+    setForm({ ...form, categoryId: "", subcategoryId: "", printerId: "" });
   };
 
   return (
@@ -247,8 +264,8 @@ export default function SubmitRequest() {
           )}
 
           <label>
-            Subject
-            <input value={form.subject} onChange={set("subject")} maxLength={255} required />
+            Subject{autoText ? " (optional, filled in for you)" : ""}
+            <input value={form.subject} onChange={set("subject")} maxLength={255} required={!autoText} />
           </label>
 
           {fields.map((f) => {
@@ -258,7 +275,7 @@ export default function SubmitRequest() {
                 return (
                   <label key={f.FieldKey}>
                     {label}
-                    <select value={form.categoryId || ""} onChange={(e) => setForm({ ...form, categoryId: e.target.value, subcategoryId: "" })} required={f.IsRequired}>
+                    <select value={form.categoryId || ""} onChange={(e) => setForm({ ...form, categoryId: e.target.value, subcategoryId: "", printerId: "" })} required={f.IsRequired}>
                       <option value="">Choose</option>
                       {categories.map((c) => <option key={c.Id} value={c.Id}>{c.Name}</option>)}
                     </select>
@@ -289,26 +306,50 @@ export default function SubmitRequest() {
                     <PersonPicker technician={me.IsTechnician} value={forUser} onChange={setForUser} />
                   </label>
                 );
-              case "newHire":
-                return (
-                  <div key={f.FieldKey} className="row">
-                    <label>
-                      {label}
-                      <input value={form.newHireName || ""} onChange={set("newHireName")} required={f.IsRequired} placeholder="Full name" />
-                    </label>
-                    <label>
-                      Their department
-                      <select value={form.newHireDepartmentId || ""} onChange={set("newHireDepartmentId")}>
-                        <option value="">Choose</option>
-                        {lookups.departments.map((d) => <option key={d.Id} value={d.Id}>{d.Name}</option>)}
-                      </select>
-                    </label>
-                  </div>
-                );
               default:
-                return null; // items and software are shown below
+                return null; // the new hire, items and software are shown below
             }
           })}
+
+          {asksForInk && (
+            <fieldset>
+              <legend>Which printer?</legend>
+              {!printers.length && <p className="muted">No printers are set up yet. Say which printer in the description.</p>}
+              {printers.length > 8 && (
+                <input value={printerSearch} onChange={(e) => setPrinterSearch(e.target.value)} placeholder="Search printers" aria-label="Search printers" />
+              )}
+              {printers.length > 0 && (
+                <div className="pick-list" role="radiogroup" aria-label="Printer">
+                  {shownPrinters.map((p) => (
+                    <label key={p.Id} className="check">
+                      <input type="radio" name="printer" checked={Number(form.printerId) === p.Id} onChange={() => setForm({ ...form, printerId: String(p.Id) })} />
+                      {printerLabel(p)}
+                    </label>
+                  ))}
+                  {!shownPrinters.length && <span className="muted small">No printer matches.</span>}
+                </div>
+              )}
+              {form.printerId && (
+                <div className="field">
+                  <span>Which colors are low?</span>
+                  {!printerInk.length && <p className="muted small" style={{ margin: 0 }}>No cartridges are listed for this printer. Say which colors in the description.</p>}
+                  <div className="checks">
+                    {printerInk.map((c) => (
+                      <label key={c.InkCartridgeId} className="check">
+                        <input type="checkbox" checked={inkIds.includes(c.InkCartridgeId)}
+                          onChange={(e) => setInkIds(e.target.checked ? [...inkIds, c.InkCartridgeId] : inkIds.filter((x) => x !== c.InkCartridgeId))} />
+                        {c.Color} ({c.Name})
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </fieldset>
+          )}
+
+          {onboarding && (
+            <OnboardingFields lookups={lookups} value={onboardingForm} onChange={setOnboardingForm} showNewHire={showNewHire} isTechnician={me.IsTechnician} />
+          )}
 
           {showItems && (
             <fieldset>
@@ -325,7 +366,9 @@ export default function SubmitRequest() {
               {forUser && !canSeeHoldings && (
                 <p className="muted">Say what to remove in the description. IT will match it to what they hold.</p>
               )}
-              {holdings && !holdings.seats.length && !holdings.items.length && <p className="muted">They don't hold any equipment or licenses.</p>}
+              {holdings && !holdings.seats.length && !holdings.items.length && !holdings.access?.length && (
+                <p className="muted">They don't hold any equipment, licenses or access.</p>
+              )}
               {holdings?.items.map((i) => (
                 <label key={`i${i.Id}`} className="check">
                   <input type="checkbox" checked={removals.ticketItemIds.includes(i.Id)} onChange={(e) => toggleRemoval("ticketItemIds", i.Id, e.target.checked)} />
@@ -336,6 +379,12 @@ export default function SubmitRequest() {
                 <label key={`s${s.Id}`} className="check">
                   <input type="checkbox" checked={removals.seatIds.includes(s.Id)} onChange={(e) => toggleRemoval("seatIds", s.Id, e.target.checked)} />
                   Remove license: {s.Name}
+                </label>
+              ))}
+              {holdings?.access?.map((a) => (
+                <label key={`a${a.Id}`} className="check">
+                  <input type="checkbox" checked={removals.accessIds.includes(a.Id)} onChange={(e) => toggleRemoval("accessIds", a.Id, e.target.checked)} />
+                  Remove access: {a.Label}
                 </label>
               ))}
             </fieldset>
@@ -359,7 +408,7 @@ export default function SubmitRequest() {
           )}
 
           <div className="field">
-            <span>Description</span>
+            <span>Description{autoText ? " (optional)" : ""}</span>
             <RichEditor value={form.description} onChange={(description) => setForm((f) => ({ ...f, description }))} images
               label="Description" minHeight={150} onError={setError} />
           </div>

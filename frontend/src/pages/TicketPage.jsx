@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, dayValue, formatDate, formatDay, formatWallRange, money } from "../api.js";
 import { useApp } from "../App.jsx";
+import { ACCESS_TEXT, IMIS_LEVELS } from "../access.js";
 import PersonPicker from "../components/PersonPicker.jsx";
 import BookingForm from "../components/BookingForm.jsx";
 import RichEditor from "../components/RichEditor.jsx";
@@ -105,6 +106,8 @@ export default function TicketPage() {
         )}
         {isTech ? <TechnicianPanel ticket={ticket} onSaved={load} />
           : !hrView && !(ticket.HasRoom && !ticket.HasEquipment) && <RequesterPanel ticket={ticket} />}
+        {(ticket.NewHireFirstName || ticket.JobTitleName) && <NewHirePanel ticket={ticket} />}
+        {(ticket.AsksForInk || data.ink?.length > 0) && <InkPanel ticket={ticket} ink={data.ink || []} onSaved={load} />}
         {access.equipment && (ticket.UsesInventory || data.items.length > 0) && <ItemsPanel ticket={ticket} items={data.items} onSaved={load} />}
         {access.equipment && (data.checklist.length > 0 || (isTech && ticket.UsesChecklist)) && (
           <ChecklistPanel ticket={ticket} checklist={data.checklist} onSaved={load} />
@@ -697,72 +700,195 @@ function ItemsPanel({ ticket, items, onSaved }) {
   );
 }
 
+
+// The checklist. Software lines say which license to give, with a dropdown
+// to change it; iMIS module lines have their level. Both can change, or a
+// line can come off, until it's ticked.
 function ChecklistPanel({ ticket, checklist, onSaved }) {
   const { me, lookups } = useApp();
   const [adding, setAdding] = useState("");
+  const [text, setText] = useState("");
   const [holdings, setHoldings] = useState(null);
   const personId = ticket.ForUserId || (ticket.ForPersonName ? null : ticket.RequesterId);
+  const tech = me.IsTechnician;
 
   useEffect(() => {
-    if (!me.IsTechnician || !personId) return setHoldings(null);
+    if (!tech || !personId) return setHoldings(null);
     api.holdings(personId).then(setHoldings).catch(() => setHoldings(null));
-  }, [me.IsTechnician, personId, checklist.length]);
+  }, [tech, personId, checklist.length]);
 
-  // The picker's value says what kind of line it is: item:, software:,
-  // seat: or held: followed by the id.
+  async function run(promise) {
+    try {
+      await promise;
+      onSaved();
+    } catch (err) {
+      alert(err.message);
+    }
+  }
+
+  // The picker's value says what kind of line it is, then the id:
+  // item:, software:, app:, seat:, held:, given:, printer:, imisModule:,
+  // imisRole:, imisGroup:, or a text kind (mailbox, calendar, phone)
+  const [addKind, addId] = adding.split(":");
+  const typing = !!ACCESS_TEXT[addKind];
   async function addLine() {
-    const [kind, id] = adding.split(":");
-    const body = { item: { inventoryItemId: Number(id), quantity: 1 }, software: { softwareId: Number(id) }, seat: { seatId: Number(id) }, held: { ticketItemId: Number(id) } }[kind];
-    try {
-      await api.addChecklistLine(ticket.Id, body);
-      setAdding("");
-      onSaved();
-    } catch (err) {
-      alert(err.message);
-    }
+    const id = Number(addId);
+    const body = {
+      item: { inventoryItemId: id, quantity: 1 },
+      software: { softwareId: id },
+      app: { applicationId: id },
+      seat: { seatId: id },
+      held: { ticketItemId: id },
+      given: { accessId: id },
+      printer: { access: { kind: "printer", refId: id } },
+      imisModule: { access: { kind: "imisModule", refId: id, level: 0 } },
+      imisRole: { access: { kind: "imisRole", refId: id } },
+      imisGroup: { access: { kind: "imisGroup", refId: id } }
+    }[addKind] || { access: { kind: addKind, text } };
+    await run(api.addChecklistLine(ticket.Id, body).then(() => { setAdding(""); setText(""); }));
   }
-  async function toggle(item, isDone) {
-    try {
-      await api.updateChecklist(ticket.Id, item.Id, isDone);
-      onSaved();
-    } catch (err) {
-      alert(err.message);
-    }
-  }
+
+  const licensesFor = (applicationId) => lookups.software.filter((s) => s.ApplicationId === applicationId);
   const done = checklist.filter((c) => c.IsDone).length;
+  const options = (list, kind) => (list || []).map((x) => <option key={`${kind}${x.Id}`} value={`${kind}:${x.Id}`}>{x.Name}</option>);
   return (
     <div className="card">
       <h3>Checklist ({done} of {checklist.length})</h3>
       {ticket.ChecklistSource === "offboarding" && <p className="muted small">Closing this ticket turns the person's account off.</p>}
       {ticket.ChecklistSource === "onboarding" && ticket.ForUserId && <p className="muted small">Closing this ticket turns the person's account on.</p>}
-      {checklist.map((c) => (
-        <label key={c.Id} className="check">
-          <input type="checkbox" checked={c.IsDone} disabled={!me.IsTechnician} onChange={(e) => toggle(c, e.target.checked)} />
-          <span>
-            {c.Label}
-            {c.IsDone && <span className="muted"> · {c.DoneByName}, {formatDate(c.DoneAt)}</span>}
-          </span>
-        </label>
-      ))}
-      {me.IsTechnician && ticket.UsesChecklist && (
-        <div className="row">
-          <select value={adding} onChange={(e) => setAdding(e.target.value)}>
-            <option value="">Add a line</option>
-            <optgroup label="Hand out to keep">
-              {lookups.inventoryItems.map((i) => <option key={`i${i.Id}`} value={`item:${i.Id}`}>{i.Name}</option>)}
-            </optgroup>
-            <optgroup label="Grant a license">
-              {lookups.software.map((s) => <option key={`s${s.Id}`} value={`software:${s.Id}`}>{s.Name}</option>)}
-            </optgroup>
-            {holdings && (holdings.items.length > 0 || holdings.seats.length > 0) && (
-              <optgroup label="Take back from them">
-                {holdings.items.map((i) => <option key={`h${i.Id}`} value={`held:${i.Id}`}>Collect: {i.Name}{i.Quantity > 1 ? ` (x${i.Quantity})` : ""}</option>)}
-                {holdings.seats.map((s) => <option key={`r${s.Id}`} value={`seat:${s.Id}`}>Remove license: {s.Name}</option>)}
+      {ticket.ChecklistSource === "onboarding" && !ticket.ForUserId && tech && (
+        <p className="muted small">Link the new hire&apos;s account in the For field before ticking licenses and access.</p>
+      )}
+      <div className="stack-list">
+        {checklist.map((c) => {
+          const open = tech && !c.IsDone;
+          const licenses = c.ApplicationId ? licensesFor(c.ApplicationId) : [];
+          return (
+            <div key={c.Id} className="stack-row">
+              <label className="check grow">
+                <input type="checkbox" checked={c.IsDone} disabled={!tech} onChange={(e) => run(api.updateChecklist(ticket.Id, c.Id, e.target.checked))} />
+                <span>
+                  {c.Label}
+                  {c.IsDone && <span className="muted"> · {c.DoneByName}, {formatDate(c.DoneAt)}</span>}
+                </span>
+              </label>
+              {open && c.ApplicationId && (
+                <select aria-label="License" value={c.SoftwareId || ""} onChange={(e) => run(api.changeChecklistLine(ticket.Id, c.Id, { softwareId: Number(e.target.value) || null }))}>
+                  <option value="">Pick a license</option>
+                  {licenses.map((l) => <option key={l.Id} value={l.Id}>{l.Name}</option>)}
+                </select>
+              )}
+              {open && c.AccessKind === "imisModule" && (
+                <select aria-label="iMIS level" value={c.AccessLevel ?? 0} onChange={(e) => run(api.changeChecklistLine(ticket.Id, c.Id, { level: Number(e.target.value) }))}>
+                  {IMIS_LEVELS.map(([n, name]) => <option key={n} value={n}>{n} - {name}</option>)}
+                </select>
+              )}
+              {open && (
+                <button type="button" className="link small" aria-label={`Remove the line ${c.Label}`}
+                  onClick={() => run(api.deleteChecklistLine(ticket.Id, c.Id))}>Remove</button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {tech && ticket.UsesChecklist && (
+        <>
+          <div className="row">
+            <select value={adding} onChange={(e) => setAdding(e.target.value)} aria-label="Add a line">
+              <option value="">Add a line</option>
+              <optgroup label="Hand out to keep">{options(lookups.inventoryItems, "item")}</optgroup>
+              <optgroup label="Give software">{options(lookups.applications, "app")}</optgroup>
+              <optgroup label="Grant a license">{options(lookups.software, "software")}</optgroup>
+              <optgroup label="Give access">
+                {Object.entries(ACCESS_TEXT).map(([kind, label]) => <option key={kind} value={`${kind}:`}>{label} (type it)</option>)}
+                {(lookups.printers || []).map((p) => <option key={`p${p.Id}`} value={`printer:${p.Id}`}>Printer: {p.Name}</option>)}
               </optgroup>
-            )}
-          </select>
-          <button type="button" className="btn sm" disabled={!adding} onClick={addLine}>Add</button>
-        </div>
+              {(lookups.imisModules || []).length > 0 && <optgroup label="iMIS module">{options(lookups.imisModules, "imisModule")}</optgroup>}
+              {(lookups.imisRoles || []).length > 0 && <optgroup label="iMIS role">{options(lookups.imisRoles, "imisRole")}</optgroup>}
+              {(lookups.imisGroups || []).length > 0 && <optgroup label="iMIS security group">{options(lookups.imisGroups, "imisGroup")}</optgroup>}
+              {holdings && (holdings.items.length > 0 || holdings.seats.length > 0 || holdings.access?.length > 0) && (
+                <optgroup label="Take back from them">
+                  {holdings.items.map((i) => <option key={`h${i.Id}`} value={`held:${i.Id}`}>Collect: {i.Name}{i.Quantity > 1 ? ` (x${i.Quantity})` : ""}</option>)}
+                  {holdings.seats.map((s) => <option key={`r${s.Id}`} value={`seat:${s.Id}`}>Remove license: {s.Name}</option>)}
+                  {(holdings.access || []).map((a) => <option key={`g${a.Id}`} value={`given:${a.Id}`}>Remove access: {a.Label}</option>)}
+                </optgroup>
+              )}
+            </select>
+            {typing && <input value={text} onChange={(e) => setText(e.target.value)} placeholder={ACCESS_TEXT[addKind]} aria-label={ACCESS_TEXT[addKind]} maxLength={200} />}
+            <button type="button" className="btn sm" disabled={!adding || (typing && !text.trim())} onClick={addLine}>Add</button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// The new hire on an onboarding ticket
+function NewHirePanel({ ticket }) {
+  const rows = [
+    ["Name", ticket.ForPersonName],
+    ["Department", ticket.ForDepartmentName],
+    ["Job title", ticket.JobTitleName],
+    ["Start date", formatDay(ticket.StartDate)]
+  ].filter(([, v]) => v);
+  return (
+    <div className="card">
+      <h3>New hire</h3>
+      <dl className="facts">
+        {rows.map(([k, v]) => <div key={k}><dt>{k}</dt><dd>{v}</dd></div>)}
+      </dl>
+    </div>
+  );
+}
+
+// Low ink: the printer and the cartridges reported. Technicians see the
+// stock, take one ("Take 1" lowers the count, never below zero) and can jump
+// to those cartridges on the Inventory page.
+function InkPanel({ ticket, ink, onSaved }) {
+  const { me } = useApp();
+  const navigate = useNavigate();
+  const tech = me.IsTechnician;
+  async function run(promise) {
+    try {
+      await promise;
+      onSaved();
+    } catch (err) {
+      alert(err.message);
+    }
+  }
+  return (
+    <div className="card">
+      <h3>Low ink</h3>
+      <p style={{ marginTop: 0 }}>
+        <strong>{ticket.PrinterName || "Printer not picked"}</strong>
+        {ticket.PrinterLocation && <span className="muted"> · {ticket.PrinterLocation}</span>}
+      </p>
+      {!ink.length && <p className="muted small">No cartridges were picked.</p>}
+      <div className="stack-list">
+        {ink.map((c) => {
+          const low = c.LowStockAt !== null && c.LowStockAt !== undefined && c.QuantityOnHand <= c.LowStockAt;
+          return (
+            <div key={c.Id} className="stack-row">
+              <span className="grow">
+                {c.Name} {c.Color}
+                {tech && <span className={low || !c.QuantityOnHand ? "warn" : "muted"}> · {c.QuantityOnHand} in stock</span>}
+                {c.TakenAt && <span className="muted small"> · taken by {c.TakenByName}, {formatDate(c.TakenAt)}</span>}
+              </span>
+              {tech && !c.TakenAt && (
+                <button type="button" className="btn sm" disabled={!c.QuantityOnHand} title={c.QuantityOnHand ? "" : "None in stock"}
+                  onClick={() => run(api.takeInk(ticket.Id, c.Id))}>{c.QuantityOnHand ? "Take 1" : "Out of stock"}</button>
+              )}
+              {tech && c.TakenAt && <button type="button" className="link small" onClick={() => run(api.undoTakeInk(ticket.Id, c.Id))}>Undo</button>}
+            </div>
+          );
+        })}
+      </div>
+      {tech && ink.length > 0 && (
+        <p style={{ marginBottom: 0 }}>
+          <button type="button" className="link" onClick={() => navigate(`/inventory?tab=ink&highlight=${ink.map((c) => c.InkCartridgeId).join(",")}`)}>
+            Open in Inventory
+          </button>
+        </p>
       )}
     </div>
   );

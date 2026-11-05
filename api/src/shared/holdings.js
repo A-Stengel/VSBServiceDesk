@@ -1,13 +1,16 @@
 const { sql } = require("./db");
+const { getAccessHoldings } = require("./access");
 
-// What a person holds now: every license seat they have and every item
-// handed to them to keep that hasn't come back (on a ticket for them, or
-// handed straight to them from their page).
+// What a person holds now: every license seat they have, every item handed
+// to them to keep that hasn't come back (on a ticket for them, or handed
+// straight to them from their page), and the access they've been given
+// (shared mailboxes, calendars, phone queues, printers and iMIS).
 async function getHoldings(db, personId) {
   const seats = await db.request().input("UserId", sql.Int, personId).query(`
-    SELECT la.Id, s.Name, la.SoftwareId, la.AssignedAt, la.AssignedTicketId
+    SELECT la.Id, s.Name, la.SoftwareId, la.AssignedAt, la.AssignedTicketId, a.Name AS ApplicationName
     FROM dbo.LicenseAssignments la
     JOIN dbo.Software s ON s.Id = la.SoftwareId
+    LEFT JOIN dbo.Applications a ON a.Id = s.ApplicationId
     WHERE la.UserId = @UserId AND la.RemovedAt IS NULL
     ORDER BY s.Name
   `);
@@ -22,7 +25,7 @@ async function getHoldings(db, personId) {
                AND (t.ForUserId = @UserId OR (t.ForUserId IS NULL AND t.RequesterId = @UserId))))
     ORDER BY i.Name
   `);
-  return { seats: seats.recordset, items: items.recordset };
+  return { seats: seats.recordset, items: items.recordset, access: await getAccessHoldings(db, personId) };
 }
 
 module.exports = { getHoldings };

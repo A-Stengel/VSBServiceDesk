@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, formatDate } from "../api.js";
 import { useApp } from "../App.jsx";
+import { ACCESS_TEXT, IMIS_LEVELS } from "../access.js";
 import { roleLabel } from "./People.jsx";
 import MultiSelect from "../components/MultiSelect.jsx";
 
@@ -10,6 +11,7 @@ import MultiSelect from "../components/MultiSelect.jsx";
 // prefilled for a change, off boarding or onboarding. Their account is
 // turned off by closing an Off Boarding ticket and back on by closing an
 // Onboarding ticket.
+
 export default function Person() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -17,6 +19,8 @@ export default function Person() {
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
   const [assign, setAssign] = useState("");
+  const [assignText, setAssignText] = useState("");
+  const [assignLevel, setAssignLevel] = useState("0");
   const [editing, setEditing] = useState(false);
 
   const load = useCallback(() => api.person(id).then(setData).catch((e) => setError(e.message)), [id]);
@@ -48,7 +52,8 @@ export default function Person() {
     const lines = (list) => list.map((name) => `☐ ${name}`).join("\n");
     const held = [
       ...holdings.items.map((i) => `${i.Name}${i.Quantity > 1 ? ` (x${i.Quantity})` : ""}`),
-      ...holdings.seats.map((s) => `${s.Name} license`)
+      ...holdings.seats.map((s) => `${s.Name} license`),
+      ...(holdings.access || []).map((a) => a.Label)
     ];
     let prefill;
     if (kind === "change") {
@@ -62,14 +67,10 @@ export default function Person() {
         description: `Collect and remove before closing:\n${held.length ? lines(held) : "(nothing held)"}`
       };
     } else {
-      const defaults = [
-        ...lookups.inventoryItems.filter((i) => i.IsDefaultForOnboarding).map((i) => i.Name),
-        ...lookups.software.filter((s) => s.IsDefaultForOnboarding).map((s) => `${s.Name} license`)
-      ];
+      // The form fills in what they need from their job title's defaults
       prefill = {
         subject: `Onboarding: ${first}`,
-        description: `Onboarding defaults:\n${defaults.length ? lines(defaults) : "(none set in Settings)"}`,
-        newHireName: first
+        newHire: { firstName: person.FirstName, lastName: person.LastName, displayName: person.DisplayName, departmentId: person.DepartmentId }
       };
     }
     navigate("/new", {
@@ -77,13 +78,29 @@ export default function Person() {
     });
   }
 
+  // The picker's value is kind:id; mailbox, calendar and phone take the
+  // typed text instead of an id
+  const [assignKind, assignId] = assign.split(":");
+  const typing = !!ACCESS_TEXT[assignKind];
   function assignPicked() {
-    const [kind, itemId] = assign.split(":");
-    const name = kind === "item"
-      ? lookups.inventoryItems.find((i) => i.Id === Number(itemId))?.Name
-      : lookups.software.find((s) => s.Id === Number(itemId))?.Name;
-    const body = kind === "item" ? { inventoryItemId: Number(itemId), quantity: 1 } : { softwareId: Number(itemId) };
-    run(api.assignHolding(person.Id, body), `Assigned ${name} to ${first}.`).then(() => setAssign(""));
+    const id = Number(assignId);
+    let body;
+    let name;
+    if (assignKind === "item") {
+      body = { inventoryItemId: id, quantity: 1 };
+      name = lookups.inventoryItems.find((i) => i.Id === id)?.Name;
+    } else if (assignKind === "seat") {
+      body = { softwareId: id };
+      name = lookups.software.find((s) => s.Id === id)?.Name;
+    } else if (typing) {
+      body = { access: { kind: assignKind, text: assignText } };
+      name = assignText;
+    } else {
+      const list = { printer: lookups.printers, imisModule: lookups.imisModules, imisRole: lookups.imisRoles, imisGroup: lookups.imisGroups }[assignKind] || [];
+      body = { access: { kind: assignKind, refId: id, level: assignKind === "imisModule" ? Number(assignLevel) : undefined } };
+      name = list.find((x) => x.Id === id)?.Name;
+    }
+    run(api.assignHolding(person.Id, body), `Gave ${name} to ${first}.`).then(() => { setAssign(""); setAssignText(""); });
   }
 
 
@@ -146,21 +163,55 @@ export default function Person() {
               </li>
             ))}
           </ul>
+          <h3 style={{ marginTop: 14 }}>Access</h3>
+          {!holdings.access?.length && <p className="muted small">No shared mailboxes, calendars, phone lines, printers or iMIS access.</p>}
+          <ul className="history">
+            {(holdings.access || []).map((a) => (
+              <li key={a.Id} className="row spread">
+                <span>
+                  {a.Label}
+                  <span className="muted small"> · since {formatDate(a.GrantedAt)}{a.GrantedTicketId ? <> · <Link to={`/tickets/${a.GrantedTicketId}`}>ticket</Link></> : ""}</span>
+                </span>
+                <button className="btn sm" onClick={() => run(api.returnHolding(person.Id, { accessId: a.Id }), "Access removed.")}>Remove</button>
+              </li>
+            ))}
+          </ul>
           {person.IsActive && (
             <div className="row" style={{ marginTop: 14 }}>
               <label className="field grow">
                 Assign
                 <select value={assign} onChange={(e) => setAssign(e.target.value)}>
-                  <option value="">Pick equipment or software</option>
+                  <option value="">Pick equipment, software or access</option>
                   <optgroup label="Equipment">
                     {lookups.inventoryItems.map((i) => <option key={`i${i.Id}`} value={`item:${i.Id}`}>{i.Name}</option>)}
                   </optgroup>
-                  <optgroup label="Software">
+                  <optgroup label="Licenses">
                     {lookups.software.map((s) => <option key={`s${s.Id}`} value={`seat:${s.Id}`}>{s.Name}</option>)}
+                  </optgroup>
+                  <optgroup label="Access">
+                    {Object.entries(ACCESS_TEXT).map(([kind, label]) => <option key={kind} value={`${kind}:`}>{label} (type it)</option>)}
+                    {(lookups.printers || []).map((p) => <option key={`p${p.Id}`} value={`printer:${p.Id}`}>Printer: {p.Name}</option>)}
+                    {(lookups.imisModules || []).map((m) => <option key={`m${m.Id}`} value={`imisModule:${m.Id}`}>iMIS module: {m.Name}</option>)}
+                    {(lookups.imisRoles || []).map((r) => <option key={`r${r.Id}`} value={`imisRole:${r.Id}`}>iMIS role: {r.Name}</option>)}
+                    {(lookups.imisGroups || []).map((g) => <option key={`g${g.Id}`} value={`imisGroup:${g.Id}`}>iMIS security group: {g.Name}</option>)}
                   </optgroup>
                 </select>
               </label>
-              <button className="btn pri" disabled={!assign} onClick={assignPicked}>Assign</button>
+              {typing && (
+                <label className="field grow">
+                  {ACCESS_TEXT[assignKind]}
+                  <input value={assignText} onChange={(e) => setAssignText(e.target.value)} maxLength={200} />
+                </label>
+              )}
+              {assignKind === "imisModule" && (
+                <label className="field">
+                  Level
+                  <select value={assignLevel} onChange={(e) => setAssignLevel(e.target.value)}>
+                    {IMIS_LEVELS.map(([n, name]) => <option key={n} value={n}>{n} - {name}</option>)}
+                  </select>
+                </label>
+              )}
+              <button className="btn pri" disabled={!assign || (typing && !assignText.trim())} onClick={assignPicked}>Assign</button>
             </div>
           )}
           <p className="muted small" style={{ marginBottom: 0 }}>License seat counts on the Inventory page follow these changes.</p>

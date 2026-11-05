@@ -20,6 +20,8 @@ const { getAvailability, assertStock, assertTicketStock, assertSeats, readItems,
 const { getHoldings } = require("../shared/holdings");
 const { logChange } = require("../shared/changelog");
 const { ticketCreated, ticketClosed } = require("../shared/notify");
+const { ACCESS_KINDS, IMIS_KINDS, readAccess, accessName, accessLabel, grantAccess } = require("../shared/access");
+const { loadSet, firstLicense, addTitle } = require("../shared/onboarding");
 const {
   TICKET_SELECT,
   FOR_IT_SQL,
@@ -67,12 +69,39 @@ async function addChecklistItem(db, ticketId, sortOrder, label, links = {}) {
     .input("SoftwareId", sql.Int, links.softwareId || null)
     .input("LicenseAssignmentId", sql.Int, links.licenseAssignmentId || null)
     .input("TicketItemId", sql.Int, links.ticketItemId || null)
+    .input("ApplicationId", sql.Int, links.applicationId || null)
+    .input("AccessKind", sql.NVarChar(20), links.access?.kind || null)
+    .input("AccessRefId", sql.Int, links.access?.refId ?? null)
+    .input("AccessText", sql.NVarChar(200), links.access?.text ?? null)
+    .input("AccessLevel", sql.TinyInt, links.access?.level ?? null)
+    .input("PersonAccessId", sql.Int, links.personAccessId || null)
     .input("SortOrder", sql.Int, sortOrder)
     .query(`
-      INSERT INTO dbo.ChecklistItems (TicketId, Label, InventoryItemId, SoftwareId, LicenseAssignmentId, TicketItemId, SortOrder, IsRemoval)
-      VALUES (@TicketId, @Label, @InventoryItemId, @SoftwareId, @LicenseAssignmentId, @TicketItemId, @SortOrder, @IsRemoval)
+      INSERT INTO dbo.ChecklistItems (TicketId, Label, InventoryItemId, SoftwareId, LicenseAssignmentId, TicketItemId,
+        ApplicationId, AccessKind, AccessRefId, AccessText, AccessLevel, PersonAccessId, SortOrder, IsRemoval)
+      VALUES (@TicketId, @Label, @InventoryItemId, @SoftwareId, @LicenseAssignmentId, @TicketItemId,
+        @ApplicationId, @AccessKind, @AccessRefId, @AccessText, @AccessLevel, @PersonAccessId, @SortOrder, @IsRemoval)
     `);
 }
+
+// "Grant access: Adobe Acrobat (Adobe Pro)". The license is what a
+// technician hands out; without one the line asks for it.
+async function appLabel(db, applicationId, softwareId) {
+  const app = await one(db, "SELECT Name FROM dbo.Applications WHERE Id = @Id", { Id: [sql.Int, applicationId] });
+  if (!app) throw new HttpError(400, "That software doesn't exist");
+  if (!softwareId) return `Grant access: ${app.Name} (pick a license)`;
+  const lic = await one(db, "SELECT Name FROM dbo.Software WHERE Id = @Id AND ApplicationId = @AppId AND IsDeleted = 0", {
+    Id: [sql.Int, softwareId],
+    AppId: [sql.Int, applicationId]
+  });
+  if (!lic) throw new HttpError(400, "That license isn't linked to the software. Link it on the Inventory page.");
+  return lic.Name === app.Name ? `Grant access: ${app.Name}` : `Grant access: ${app.Name} (${lic.Name})`;
+}
+
+const giveAccessLabel = (entry, name) => `Give access: ${accessLabel(entry, name)}`;
+const removeAccessLabel = (held) => `Remove access: ${held.Label}`;
+
+const esc = (text) => String(text ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
 async function softwareNames(db, ids) {
   const names = new Map();
@@ -94,7 +123,9 @@ async function addRemovalChecklist(db, ticketId, personId, order, only) {
   const holdings = await getHoldings(db, personId);
   const seats = only ? holdings.seats.filter((s) => only.seatIds.includes(s.Id)) : holdings.seats;
   const items = only ? holdings.items.filter((i) => only.ticketItemIds.includes(i.Id)) : holdings.items;
-  if (only && seats.length + items.length < only.seatIds.length + only.ticketItemIds.length) {
+  const accessIds = only?.accessIds || [];
+  const access = only ? holdings.access.filter((a) => accessIds.includes(a.Id)) : holdings.access;
+  if (only && seats.length + items.length + access.length < only.seatIds.length + only.ticketItemIds.length + accessIds.length) {
     throw new HttpError(400, "Something picked to remove isn't held by that person any more");
   }
   for (const seat of seats) {
@@ -105,14 +136,35 @@ async function addRemovalChecklist(db, ticketId, personId, order, only) {
     await addChecklistItem(db, ticketId, order, collectLabel(item), { ticketItemId: item.Id, inventoryItemId: item.InventoryItemId, isRemoval: true });
     order += 10;
   }
+  for (const held of access) {
+    await addChecklistItem(db, ticketId, order, removeAccessLabel(held), { personAccessId: held.Id, isRemoval: true });
+    order += 10;
+  }
   return order;
 }
 
-// Body "removals": { seatIds: [...], ticketItemIds: [...] }
+// Body "removals": { seatIds: [...], ticketItemIds: [...], accessIds: [...] }
 function readRemovals(value) {
-  if (value === undefined || value === null) return { seatIds: [], ticketItemIds: [] };
+  if (value === undefined || value === null) return { seatIds: [], ticketItemIds: [], accessIds: [] };
   if (typeof value !== "object" || Array.isArray(value)) throw new HttpError(400, "Removals must be an object");
-  return { seatIds: readIdList(value.seatIds, "License"), ticketItemIds: readIdList(value.ticketItemIds, "Item") };
+  return {
+    seatIds: readIdList(value.seatIds, "License"),
+    ticketItemIds: readIdList(value.ticketItemIds, "Item"),
+    accessIds: readIdList(value.accessIds, "Access")
+  };
+}
+
+// The new hire part of an onboarding form:
+// { firstName, lastName, displayName, departmentId, jobTitleId | jobTitleName }
+function readNewHire(value) {
+  if (!value || typeof value !== "object") throw new HttpError(400, "Fill in the new hire's details");
+  const firstName = requiredText(value.firstName, "First name", 100);
+  const lastName = requiredText(value.lastName, "Last name", 100);
+  const displayName = optionalText(value.displayName, "Display name", 200);
+  const departmentId = requiredId(value.departmentId, "Department");
+  const jobTitleId = optionalId(value.jobTitleId, "Job title");
+  const jobTitleName = jobTitleId ? null : optionalText(value.jobTitleName, "Job title", 150);
+  return { firstName, lastName, displayName, departmentId, jobTitleId, jobTitleName, name: displayName || `${firstName} ${lastName}` };
 }
 
 // Technicians, or the person themselves, can see what someone holds (for the
@@ -221,9 +273,10 @@ endpoint(
       return value;
     };
 
-    const subject = requiredText(data.subject, "Subject", 255);
-    const draft = typeof data.description === "string" ? data.description : "";
-    if (!hasContent(draft)) throw new HttpError(400, "Description is required");
+    // Onboarding and low ink forms can leave these blank; they're written
+    // from the form further down
+    let subject = optionalText(data.subject, "Subject", 255);
+    let draft = typeof data.description === "string" ? data.description : "";
     if (draft.length > 200000) throw new HttpError(400, "The description is too long");
     const inlineNames = readInlineNames(data.inline);
     const priorityId = optionalId(data.priorityId, "Priority") || settings.DefaultPriorityId;
@@ -241,9 +294,29 @@ endpoint(
     }
     const checklistSource = category?.ChecklistSource || null;
     const subcategoryId = shown("subcategory") ? need("subcategory", optionalId(data.subcategoryId, "Subcategory")) : null;
+    let subcategory = null;
     if (subcategoryId) {
-      const sub = await one(pool, "SELECT CategoryId FROM dbo.Subcategories WHERE Id = @Id", { Id: [sql.Int, subcategoryId] });
-      if (!sub || sub.CategoryId !== categoryId) throw new HttpError(400, "That subcategory isn't under the chosen category");
+      subcategory = await one(pool, "SELECT CategoryId, Name, AsksForInk FROM dbo.Subcategories WHERE Id = @Id", { Id: [sql.Int, subcategoryId] });
+      if (!subcategory || subcategory.CategoryId !== categoryId) throw new HttpError(400, "That subcategory isn't under the chosen category");
+    }
+
+    // Low ink: which printer, and which of its cartridges are low
+    let printer = null;
+    let inks = [];
+    if (subcategory?.AsksForInk) {
+      printer = await one(pool, "SELECT Id, Name, Location FROM dbo.Printers WHERE Id = @Id AND IsActive = 1 AND IsDeleted = 0", {
+        Id: [sql.Int, requiredId(data.printerId, "Printer")]
+      });
+      if (!printer) throw new HttpError(400, "Pick a printer from the list");
+      const fits = (await pool.request().input("PrinterId", sql.Int, printer.Id).query(`
+        SELECT c.Id, c.Name, c.Color FROM dbo.InkCartridgePrinters cp
+        JOIN dbo.InkCartridges c ON c.Id = cp.InkCartridgeId
+        WHERE cp.PrinterId = @PrinterId AND c.IsActive = 1 AND c.IsDeleted = 0
+      `)).recordset;
+      const picked = readIdList(data.inkCartridgeIds, "Ink");
+      inks = fits.filter((c) => picked.includes(c.Id));
+      if (inks.length < picked.length) throw new HttpError(400, "One of the cartridges picked doesn't fit that printer");
+      if (fits.length && !inks.length) throw new HttpError(400, "Pick which colors are low");
     }
     const startDate = shown("startDate") ? need("startDate", optionalDate(data.startDate, "Start date")) : null;
     const endDate = shown("endDate") ? need("endDate", optionalDate(data.endDate, "End date")) : null;
@@ -253,19 +326,109 @@ endpoint(
     const rehire = checklistSource === "onboarding" && user.IsTechnician && !shown("forUser");
     const forUserId = shown("forUser") ? need("forUser", optionalId(data.forUserId, "Person"))
       : rehire ? optionalId(data.forUserId, "Person") : null;
-    const forPersonName = shown("newHire") ? need("newHire", optionalText(data.newHireName, "New hire", 200)) : null;
-    const forDepartmentId = shown("newHire") ? optionalId(data.newHireDepartmentId, "Department") : null;
+    const newHire = shown("newHire") && (data.newHire || fields.get("newHire").IsRequired) ? readNewHire(data.newHire) : null;
+    const forPersonName = newHire?.name || null;
+    const forDepartmentId = newHire?.departmentId || null;
+    // The new hire's title: one of the department's, or a new one typed on
+    // the form (added to the department in the transaction below)
+    let jobTitleId = null;
+    let newTitleName = null;
+    let newHireDepartment = null;
+    let jobTitleLabel = null;
+    if (newHire) {
+      newHireDepartment = await one(pool, "SELECT Id, Name FROM dbo.Departments WHERE Id = @Id", { Id: [sql.Int, newHire.departmentId] });
+      if (!newHireDepartment) throw new HttpError(400, "That department doesn't exist");
+      if (newHire.jobTitleId) {
+        const title = await one(pool, "SELECT Id, Name FROM dbo.JobTitles WHERE Id = @Id AND DepartmentId = @DepartmentId", {
+          Id: [sql.Int, newHire.jobTitleId],
+          DepartmentId: [sql.Int, newHire.departmentId]
+        });
+        if (!title) throw new HttpError(400, "That job title isn't under the department");
+        jobTitleId = title.Id;
+        jobTitleLabel = title.Name;
+      } else if (newHire.jobTitleName) {
+        const title = await one(pool, "SELECT Id, Name FROM dbo.JobTitles WHERE DepartmentId = @DepartmentId AND LOWER(Name) = LOWER(@Name)", {
+          DepartmentId: [sql.Int, newHire.departmentId],
+          Name: [sql.NVarChar(150), newHire.jobTitleName]
+        });
+        if (title) jobTitleId = title.Id;
+        else newTitleName = newHire.jobTitleName;
+        jobTitleLabel = title ? title.Name : newHire.jobTitleName;
+      }
+    }
 
-    // Onboarding always shows the equipment and license pick list
+    // Onboarding always shows the equipment and software pick lists, and
+    // fills in what the job title's defaults require
     const onboarding = checklistSource === "onboarding";
-    const items = shown("items") || onboarding ? need("items", readItems(data.items)) : [];
-    const softwareIds = shown("software") || onboarding ? need("software", readIdList(data.softwareIds, "Software")) : [];
-    const removals = shown("removals") ? readRemovals(data.removals) : { seatIds: [], ticketItemIds: [] };
-    if (removals.seatIds.length + removals.ticketItemIds.length) {
+    const items = shown("items") || onboarding ? readItems(data.items) : [];
+    const softwareIds = shown("software") && !onboarding ? need("software", readIdList(data.softwareIds, "Software")) : [];
+    const apps = [];
+    const access = [];
+    if (onboarding) {
+      // A new title starts from the general defaults, so those apply
+      const set = await loadSet(pool, jobTitleId);
+      for (const required of set.items.filter((i) => i.isRequired)) {
+        if (!items.some((i) => i.inventoryItemId === required.inventoryItemId)) items.push({ inventoryItemId: required.inventoryItemId, quantity: 1 });
+      }
+      const applicationIds = readIdList(data.applicationIds, "Software");
+      for (const required of set.apps.filter((a) => a.isRequired)) {
+        if (!applicationIds.includes(required.applicationId)) applicationIds.push(required.applicationId);
+      }
+      for (const applicationId of applicationIds) {
+        const app = await one(pool, "SELECT Id, IsImis FROM dbo.Applications WHERE Id = @Id AND IsActive = 1", { Id: [sql.Int, applicationId] });
+        if (!app) throw new HttpError(400, "One of the software choices isn't available");
+        const fromSet = set.apps.find((a) => a.applicationId === applicationId);
+        const softwareId = fromSet?.softwareId || (await firstLicense(pool, applicationId));
+        apps.push({ applicationId, softwareId, isImis: !!app.IsImis });
+      }
+      // Mailboxes, calendars, phone lines and printers from the form
+      if (data.access !== undefined && data.access !== null && !Array.isArray(data.access)) throw new HttpError(400, "Access must be a list");
+      for (const value of data.access || []) {
+        const entry = readAccess(value);
+        if (IMIS_KINDS.includes(entry.kind)) throw new HttpError(400, "iMIS access is set by IT on the ticket");
+        const same = access.some((x) => x.kind === entry.kind && (ACCESS_KINDS[entry.kind].text ? x.text.toLowerCase() === entry.text.toLowerCase() : x.refId === entry.refId));
+        if (!same) access.push({ ...entry, name: await accessName(pool, entry) });
+      }
+      if (access.length > 200) throw new HttpError(400, "That's too much access for one form");
+      // iMIS details come from the title's defaults when iMIS is asked for.
+      // A read only license gets the StaffReadOnly role and no module levels.
+      const imis = apps.find((a) => a.isImis);
+      if (imis) {
+        const license = imis.softwareId ? await one(pool, "SELECT ImisAccess FROM dbo.Software WHERE Id = @Id", { Id: [sql.Int, imis.softwareId] }) : null;
+        const readOnly = license?.ImisAccess === "read";
+        const entries = set.access.filter((a) => IMIS_KINDS.includes(a.kind) && !(readOnly && a.kind === "imisModule"));
+        if (readOnly) {
+          const role = await one(pool, "SELECT Id FROM dbo.ImisRoles WHERE Name = N'StaffReadOnly' AND IsActive = 1");
+          if (role && !entries.some((a) => a.kind === "imisRole" && a.refId === role.Id)) entries.unshift({ kind: "imisRole", refId: role.Id, text: null, level: null });
+        }
+        for (const entry of entries) {
+          // Anything turned off since the defaults were saved is left out
+          const name = await accessName(pool, entry).catch(() => null);
+          if (name) access.push({ ...entry, name });
+        }
+      }
+    }
+    need("items", items);
+    if (onboarding) need("software", apps);
+
+    // What the onboarding and low ink forms leave blank
+    if (!subject && newHire) subject = `Onboarding: ${newHire.name}`;
+    if (!subject && printer) subject = `Low ink: ${printer.Name}`;
+    if (!subject) throw new HttpError(400, "Subject is required");
+    if (!hasContent(draft) && newHire) {
+      draft = `<p>New hire: ${esc(newHire.name)}</p><p>Department: ${esc(newHireDepartment.Name)}${jobTitleLabel ? `<br />Job title: ${esc(jobTitleLabel)}` : ""}${startDate ? `<br />Start date: ${startDate}` : ""}</p>`;
+    }
+    if (!hasContent(draft) && printer) {
+      draft = `<p>${esc(printer.Name)}${printer.Location ? ` (${esc(printer.Location)})` : ""} is low on ${inks.length ? esc(inks.map((c) => `${c.Name} ${c.Color}`).join(", ")) : "ink"}.</p>`;
+    }
+    if (!hasContent(draft)) throw new HttpError(400, "Description is required");
+
+    const removals = shown("removals") ? readRemovals(data.removals) : { seatIds: [], ticketItemIds: [], accessIds: [] };
+    if (removals.seatIds.length + removals.ticketItemIds.length + removals.accessIds.length) {
       if (!forUserId) throw new HttpError(400, "Pick who the equipment or software is being removed from");
       if (!user.IsTechnician && forUserId !== user.Id) throw new HttpError(403, "Only technicians can pick what to remove from someone else");
     }
-    if (fields.get("removals")?.IsRequired && !removals.seatIds.length && !removals.ticketItemIds.length) {
+    if (fields.get("removals")?.IsRequired && !removals.seatIds.length && !removals.ticketItemIds.length && !removals.accessIds.length) {
       throw new HttpError(400, `${fields.get("removals").Label} is required`);
     }
 
@@ -305,16 +468,32 @@ endpoint(
     let ticketId;
     try {
       ticketId = await withTransaction(async (tx) => {
+        if (newTitleName) {
+          jobTitleId = await addTitle(tx, newHire.departmentId, newTitleName);
+          await logChange(tx, {
+            area: "settings",
+            section: "onboarding",
+            entityId: jobTitleId,
+            actorId: user.Id,
+            summary: `Added the job title ${newTitleName} to ${newHireDepartment.Name} from an onboarding request`
+          });
+        }
         const created = await one(
           tx,
           `INSERT INTO dbo.Tickets
              (TicketTypeId, StatusId, PriorityId, CategoryId, SubcategoryId, SourceId, RequesterId, ForUserId,
-              ForPersonName, ForDepartmentId, TechnicianId, DepartmentId, Subject, Description, StartDate, EndDate)
+              ForPersonName, ForDepartmentId, TechnicianId, DepartmentId, Subject, Description, StartDate, EndDate,
+              NewHireFirstName, NewHireLastName, JobTitleId, PrinterId)
            OUTPUT INSERTED.Id
            VALUES
              (@TypeId, @StatusId, @PriorityId, @CategoryId, @SubcategoryId, @SourceId, @RequesterId, @ForUserId,
-              @ForPersonName, @ForDepartmentId, @TechnicianId, @DepartmentId, @Subject, @Description, @StartDate, @EndDate)`,
+              @ForPersonName, @ForDepartmentId, @TechnicianId, @DepartmentId, @Subject, @Description, @StartDate, @EndDate,
+              @NewHireFirstName, @NewHireLastName, @JobTitleId, @PrinterId)`,
           {
+            NewHireFirstName: [sql.NVarChar(100), newHire?.firstName || null],
+            NewHireLastName: [sql.NVarChar(100), newHire?.lastName || null],
+            JobTitleId: [sql.Int, jobTitleId],
+            PrinterId: [sql.Int, printer?.Id || null],
             TypeId: [sql.Int, typeId],
             StatusId: [sql.Int, statusId],
             PriorityId: [sql.Int, priorityId],
@@ -356,6 +535,18 @@ endpoint(
             await addChecklistItem(tx, id, order, `Grant access: ${names.get(softwareId)}`, { softwareId });
             order += 10;
           }
+          for (const app of apps) {
+            await addChecklistItem(tx, id, order, await appLabel(tx, app.applicationId, app.softwareId), app);
+            order += 10;
+          }
+          for (const entry of access) {
+            await addChecklistItem(tx, id, order, giveAccessLabel(entry, entry.name), { access: entry });
+            order += 10;
+          }
+        }
+        for (const ink of inks) {
+          await tx.request().input("TicketId", sql.Int, id).input("InkCartridgeId", sql.Int, ink.Id)
+            .query("INSERT INTO dbo.TicketInk (TicketId, InkCartridgeId) VALUES (@TicketId, @InkCartridgeId)");
         }
         if (type.UsesChecklist && checklistSource === "offboarding") await addRemovalChecklist(tx, id, forUserId, order);
         else if (type.UsesChecklist && forUserId) await addRemovalChecklist(tx, id, forUserId, order, removals);
@@ -430,13 +621,24 @@ endpoint("getTicket", { methods: ["GET"], route: "tickets/{id:int}" }, async (re
     : [];
   const checklist = access.equipment
     ? (await pool.request().input("Id", sql.Int, id).query(`
-        SELECT ci.Id, ci.Label, ci.IsDone, ci.IsRemoval, ci.DoneAt, ${personName("u")} AS DoneByName, ci.SortOrder
+        SELECT ci.Id, ci.Label, ci.IsDone, ci.IsRemoval, ci.DoneAt, ${personName("u")} AS DoneByName, ci.SortOrder,
+               ci.ApplicationId, ci.SoftwareId, ci.AccessKind, ci.AccessRefId, ci.AccessLevel, ci.AccessText
         FROM dbo.ChecklistItems ci
         LEFT JOIN dbo.Users u ON u.Id = ci.DoneById
         WHERE ci.TicketId = @Id
         ORDER BY ci.SortOrder, ci.Id
       `)).recordset
     : [];
+  // Low ink: the cartridges reported, with their stock for technicians
+  const ink = (await pool.request().input("Id", sql.Int, id).query(`
+    SELECT ti.Id, ti.InkCartridgeId, c.Name, c.Color, ti.TakenAt, CASE WHEN u.Id IS NOT NULL THEN ${personName("u")} END AS TakenByName
+           ${tech ? ", c.QuantityOnHand, c.LowStockAt" : ""}
+    FROM dbo.TicketInk ti
+    JOIN dbo.InkCartridges c ON c.Id = ti.InkCartridgeId
+    LEFT JOIN dbo.Users u ON u.Id = ti.TakenById
+    WHERE ti.TicketId = @Id
+    ORDER BY c.Name, c.Color
+  `)).recordset;
   // Technicians see the whole history; HR the lines about the room and event
   let events = [];
   if (tech || access.roomOnlyView) {
@@ -487,6 +689,7 @@ endpoint("getTicket", { methods: ["GET"], route: "tickets/{id:int}" }, async (re
       cc: cc.recordset.map((r) => r.Email),
       items,
       checklist,
+      ink,
       events
     }
   };
@@ -673,8 +876,11 @@ endpoint(
 
 // Adds a line to a ticket's checklist, for what the form didn't cover.
 // Body, one of: { inventoryItemId, quantity } hand out equipment to keep,
-// { softwareId } grant a license, { seatId } remove a license the person
-// holds, { ticketItemId } collect equipment the person holds.
+// { softwareId } grant a license, { applicationId, softwareId } grant
+// software with the license picked, { access: { kind, refId, text, level } }
+// give access (mailbox, printer, iMIS...), { seatId } remove a license the
+// person holds, { ticketItemId } collect equipment the person holds,
+// { accessId } take away access the person has.
 endpoint(
   "addChecklistItem",
   { methods: ["POST"], route: "tickets/{id:int}/checklist", role: "technician", failMessage: "Could not add the checklist line" },
@@ -694,18 +900,32 @@ endpoint(
         const added = await addTicketItem(tx, id, item.inventoryItemId, item.quantity);
         label = `Hand out: ${added.name}${item.quantity > 1 ? ` (x${item.quantity})` : ""}`;
         await addChecklistItem(tx, id, order, label, { ticketItemId: added.id, inventoryItemId: item.inventoryItemId });
+      } else if (body.applicationId) {
+        const applicationId = requiredId(body.applicationId, "Software");
+        const softwareId = optionalId(body.softwareId, "License") || (await firstLicense(tx, applicationId));
+        label = await appLabel(tx, applicationId, softwareId);
+        await addChecklistItem(tx, id, order, label, { applicationId, softwareId });
+      } else if (body.access) {
+        const entry = readAccess(body.access);
+        label = giveAccessLabel(entry, await accessName(tx, entry));
+        await addChecklistItem(tx, id, order, label, { access: entry });
       } else if (body.softwareId) {
         const softwareId = requiredId(body.softwareId, "Software");
         const names = await softwareNames(tx, [softwareId]);
         label = `Grant access: ${names.get(softwareId)}`;
         await addChecklistItem(tx, id, order, label, { softwareId });
-      } else if (body.seatId || body.ticketItemId) {
+      } else if (body.seatId || body.ticketItemId || body.accessId) {
         if (!personId) throw new HttpError(400, "Link the ticket to the person (the For field) first");
-        const only = { seatIds: body.seatId ? [requiredId(body.seatId, "License")] : [], ticketItemIds: body.ticketItemId ? [requiredId(body.ticketItemId, "Item")] : [] };
+        const only = {
+          seatIds: body.seatId ? [requiredId(body.seatId, "License")] : [],
+          ticketItemIds: body.ticketItemId ? [requiredId(body.ticketItemId, "Item")] : [],
+          accessIds: body.accessId ? [requiredId(body.accessId, "Access")] : []
+        };
         const holdings = await getHoldings(tx, personId);
         const seat = holdings.seats.find((s) => only.seatIds.includes(s.Id));
         const held = holdings.items.find((i) => only.ticketItemIds.includes(i.Id));
-        label = seat ? removeSeatLabel(seat) : held ? collectLabel(held) : null;
+        const given = holdings.access.find((a) => only.accessIds.includes(a.Id));
+        label = seat ? removeSeatLabel(seat) : held ? collectLabel(held) : given ? removeAccessLabel(given) : null;
         await addRemovalChecklist(tx, id, personId, order, only);
       } else {
         throw new HttpError(400, "Say what the line is for");
@@ -722,7 +942,7 @@ endpoint(
   async (request, context, user) => {
     const id = Number(request.params.id);
     const itemId = Number(request.params.itemId);
-    const done = !!(await readJson(request)).isDone;
+    const body = await readJson(request);
 
     await withTransaction(async (tx) => {
       const ticket = await loadTicket(tx, id);
@@ -732,6 +952,34 @@ endpoint(
         ItemId: [sql.Int, itemId]
       });
       if (!item) throw new HttpError(404, "Checklist item not found");
+
+      // Changing the license or iMIS level, before the line is done
+      if ("softwareId" in body || "level" in body) {
+        if (item.IsDone) throw new HttpError(400, "Untick the line before changing it");
+        let label = item.Label;
+        if ("softwareId" in body) {
+          if (!item.ApplicationId) throw new HttpError(400, "This line isn't for software");
+          item.SoftwareId = optionalId(body.softwareId, "License");
+          label = await appLabel(tx, item.ApplicationId, item.SoftwareId);
+        }
+        if ("level" in body) {
+          if (item.AccessKind !== "imisModule") throw new HttpError(400, "Only iMIS module lines have a level");
+          const entry = readAccess({ kind: item.AccessKind, refId: item.AccessRefId, level: body.level });
+          item.AccessLevel = entry.level;
+          label = giveAccessLabel(entry, await accessName(tx, entry, true));
+        }
+        await tx.request()
+          .input("ItemId", sql.Int, itemId)
+          .input("SoftwareId", sql.Int, item.SoftwareId)
+          .input("Level", sql.TinyInt, item.AccessLevel)
+          .input("Label", sql.NVarChar(255), label.slice(0, 255))
+          .query("UPDATE dbo.ChecklistItems SET SoftwareId = @SoftwareId, AccessLevel = @Level, Label = @Label WHERE Id = @ItemId");
+        if (label !== item.Label) await recordEvents(tx, id, user.Id, [{ field: "Checklist line changed", oldValue: item.Label, newValue: label }]);
+        item.Label = label;
+      }
+
+      if (!("isDone" in body)) return;
+      const done = !!body.isDone;
       if (item.IsDone === done) return;
       const leaving = item.IsRemoval;
       const now = done ? "SYSUTCDATETIME()" : "NULL";
@@ -757,6 +1005,33 @@ endpoint(
           await assertSeats(tx, [seat?.SoftwareId]);
         }
       }
+
+      // Access (mailboxes, printers, iMIS...): ticking gives it to the person
+      // or takes it away; unticking undoes that
+      let accessId = item.PersonAccessId;
+      if (leaving && item.PersonAccessId) {
+        await tx.request()
+          .input("AccessId", sql.Int, item.PersonAccessId)
+          .input("TicketId", sql.Int, done ? id : null)
+          .query(`UPDATE dbo.PersonAccess SET RemovedAt = ${now}, RemovedTicketId = @TicketId WHERE Id = @AccessId`);
+      }
+      if (!leaving && item.AccessKind) {
+        if (done) {
+          const personId = ticket.ForUserId || (ticket.ForPersonName ? null : ticket.RequesterId);
+          if (!personId) throw new HttpError(400, "Link the new hire to their account (the For field) before giving access");
+          accessId = await grantAccess(tx, personId, {
+            kind: item.AccessKind,
+            refId: item.AccessRefId,
+            text: item.AccessText,
+            level: item.AccessLevel
+          }, id);
+        } else if (item.PersonAccessId) {
+          await tx.request().input("ItemId", sql.Int, itemId).query("UPDATE dbo.ChecklistItems SET PersonAccessId = NULL WHERE Id = @ItemId");
+          await tx.request().input("AccessId", sql.Int, item.PersonAccessId).query("DELETE FROM dbo.PersonAccess WHERE Id = @AccessId");
+          accessId = null;
+        }
+      }
+      if (!leaving && done && item.ApplicationId && !item.SoftwareId) throw new HttpError(400, "Pick the license first");
 
       let seatId = item.LicenseAssignmentId;
       if (!leaving && item.SoftwareId) {
@@ -785,12 +1060,42 @@ endpoint(
         .input("IsDone", sql.Bit, done)
         .input("DoneById", sql.Int, done ? user.Id : null)
         .input("SeatId", sql.Int, seatId)
+        .input("AccessId", sql.Int, leaving ? item.PersonAccessId : accessId)
         .query(`
           UPDATE dbo.ChecklistItems
-          SET IsDone = @IsDone, DoneById = @DoneById, DoneAt = ${now}, LicenseAssignmentId = @SeatId
+          SET IsDone = @IsDone, DoneById = @DoneById, DoneAt = ${now}, LicenseAssignmentId = @SeatId, PersonAccessId = @AccessId
           WHERE Id = @ItemId
         `);
       await recordEvents(tx, id, user.Id, [{ field: done ? "Checklist done" : "Checklist undone", newValue: item.Label }]);
+    });
+    return { jsonBody: { ok: true } };
+  }
+);
+
+// Takes a line off the checklist, while it isn't done. Equipment the line
+// would have handed out comes off the ticket too, unless it's already out.
+endpoint(
+  "deleteChecklistItem",
+  { methods: ["DELETE"], route: "tickets/{id:int}/checklist/{itemId:int}", role: "technician", failMessage: "Could not remove the checklist line" },
+  async (request, context, user) => {
+    const id = Number(request.params.id);
+    const itemId = Number(request.params.itemId);
+    await withTransaction(async (tx) => {
+      const item = await one(tx, "SELECT * FROM dbo.ChecklistItems WHERE Id = @ItemId AND TicketId = @Id", {
+        Id: [sql.Int, id],
+        ItemId: [sql.Int, itemId]
+      });
+      if (!item) throw new HttpError(404, "Checklist item not found");
+      if (item.IsDone) throw new HttpError(400, "Untick the line before removing it");
+      await tx.request().input("ItemId", sql.Int, itemId).query("DELETE FROM dbo.ChecklistItems WHERE Id = @ItemId");
+      if (item.TicketItemId && !item.IsRemoval) {
+        await tx.request().input("TicketItemId", sql.Int, item.TicketItemId).input("TicketId", sql.Int, id).query(`
+          DELETE FROM dbo.TicketItems
+          WHERE Id = @TicketItemId AND TicketId = @TicketId AND OutAt IS NULL
+            AND NOT EXISTS (SELECT 1 FROM dbo.ChecklistItems WHERE TicketItemId = @TicketItemId)
+        `);
+      }
+      await recordEvents(tx, id, user.Id, [{ field: "Checklist line removed", newValue: item.Label }]);
     });
     return { jsonBody: { ok: true } };
   }
