@@ -57,9 +57,13 @@ endpoint("listUsers", { methods: ["GET"], route: "users", role: "technician" }, 
 
 // Lets anyone signed in pick a colleague ("Who is it for?"). Staff only, and
 // only the fields a picker needs.
-endpoint("searchPeople", { methods: ["GET"], route: "people/search" }, async (request) => {
+// ?managed=1 keeps it to the departments the person manages (Access &
+// Equipment requests from managers).
+endpoint("searchPeople", { methods: ["GET"], route: "people/search" }, async (request, context, user) => {
   const search = (request.query.get("q") || "").trim().slice(0, 100);
   if (search.length < 2) return { jsonBody: [] };
+  const managed = request.query.get("managed") === "1" ? user.ManagedDepartmentIds || [] : null;
+  if (managed && !managed.length) return { jsonBody: [] };
   const settings = await getSettings();
   const pool = await getConnection();
   const result = await pool
@@ -71,9 +75,38 @@ endpoint("searchPeople", { methods: ["GET"], route: "people/search" }, async (re
       FROM (${PEOPLE_SELECT}) p
       WHERE p.IsActive = 1 AND p.UserTypeId = @StaffTypeId
         AND (p.DisplayName LIKE @Search OR p.Email LIKE @Search)
+        ${managed ? `AND p.DepartmentId IN (${managed.map(Number).join(",")})` : ""}
       ORDER BY p.DisplayName
     `);
   return { jsonBody: result.recordset };
+});
+
+// My team: a manager's people and what each holds, in plain words. No
+// prices, license names or iMIS details: software shows by its friendly
+// name, and iMIS access only as the iMIS software itself.
+endpoint("myTeam", { methods: ["GET"], route: "people/team" }, async (request, context, user) => {
+  const managed = (user.ManagedDepartmentIds || []).map(Number);
+  if (!managed.length) throw new HttpError(403, "My team is for department managers");
+  const settings = await getSettings();
+  const pool = await getConnection();
+  const people = (await pool.request().input("StaffTypeId", sql.Int, settings.StaffUserTypeId).query(`
+    SELECT p.Id, p.DisplayName, p.Email, p.JobTitle, p.Phone, p.DepartmentId, p.DepartmentName
+    FROM (${PEOPLE_SELECT}) p
+    WHERE p.IsActive = 1 AND p.UserTypeId = @StaffTypeId AND p.DepartmentId IN (${managed.join(",")})
+    ORDER BY p.DepartmentName, p.DisplayName
+  `)).recordset;
+  const departments = (await pool.request().query(
+    `SELECT Id, Name FROM dbo.Departments WHERE Id IN (${managed.join(",")}) ORDER BY SortOrder, Name`
+  )).recordset;
+  for (const person of people) {
+    const held = await getHoldings(pool, person.Id);
+    person.equipment = held.items.map((i) => ({ name: i.Name, quantity: i.Quantity }));
+    person.software = [...new Set(held.seats.map((s) => s.ApplicationName).filter(Boolean))].sort();
+    person.access = held.access
+      .filter((a) => !["imisModule", "imisRole", "imisGroup"].includes(a.Kind))
+      .map((a) => a.Label);
+  }
+  return { jsonBody: { departments, people } };
 });
 
 // A technician adds a person (for example an outside caller) so a ticket can be

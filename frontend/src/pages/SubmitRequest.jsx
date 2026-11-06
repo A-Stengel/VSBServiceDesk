@@ -48,11 +48,16 @@ function startingPoint(lookups, params, state) {
 
 export default function SubmitRequest() {
   const { me, lookups, notify } = useApp();
+  // Access & Equipment is for managers (their own departments), IT and HR
+  const managedIds = me.ManagedDepartmentIds || [];
+  const limitToManaged = !me.IsTechnician && !me.IsEventManager;
+  const canRequestAccess = !limitToManaged || managedIds.length > 0;
+  const ticketTypes = lookups.ticketTypes.filter((t) => canRequestAccess || !t.UsesChecklist);
   const navigate = useNavigate();
   const location = useLocation();
   const [params] = useSearchParams();
   const [start] = useState(() => startingPoint(lookups, params, location.state));
-  const [typeId, setTypeId] = useState(start.typeId);
+  const [typeId, setTypeId] = useState(() => (ticketTypes.some((t) => String(t.Id) === start.typeId) ? start.typeId : ""));
   const [form, setForm] = useState(start.form);
   const [items, setItems] = useState([]);
   const [softwareIds, setSoftwareIds] = useState([]);
@@ -195,7 +200,7 @@ export default function SubmitRequest() {
       <fieldset>
         <legend>What do you need?</legend>
         <div className="choices">
-          {lookups.ticketTypes.map((t) => (
+          {ticketTypes.map((t) => (
             <button type="button" key={t.Id} className={`choice ${String(t.Id) === typeId ? "on" : ""}`} onClick={() => pickType(t)}
               aria-pressed={String(t.Id) === typeId}>
               <strong>{t.Id === lookups.defaults.bookingTicketTypeId ? "Equipment Rental / Event Booking" : t.Name}</strong>
@@ -303,7 +308,7 @@ export default function SubmitRequest() {
                 return (
                   <label key={f.FieldKey}>
                     {label}
-                    <PersonPicker technician={me.IsTechnician} value={forUser} onChange={setForUser} />
+                    <PersonPicker technician={me.IsTechnician} managedOnly={limitToManaged} value={forUser} onChange={setForUser} />
                   </label>
                 );
               default:
@@ -348,7 +353,8 @@ export default function SubmitRequest() {
           )}
 
           {onboarding && (
-            <OnboardingFields lookups={lookups} value={onboardingForm} onChange={setOnboardingForm} showNewHire={showNewHire} isTechnician={me.IsTechnician} />
+            <OnboardingFields lookups={lookups} value={onboardingForm} onChange={setOnboardingForm} showNewHire={showNewHire} isTechnician={me.IsTechnician}
+              departmentIds={limitToManaged ? managedIds : undefined} />
           )}
 
           {showItems && (

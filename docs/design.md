@@ -316,9 +316,17 @@ App. The staff screens follow Zendesk.
 - **My tickets.** Two tabs, Active and Closed, showing ticket number, subject,
   status, technician and last update.
 - **Ticket.** The conversation without technician notes, attachments, a reply
-  box, and the survey once the ticket is closed.
+  box, and the survey once the ticket is closed. The checklist on Access &
+  Equipment tickets is for technicians only, since it names licenses and iMIS
+  access.
 - **Equipment Rental / Event Booking.** The booking form, described under
   Event booking.
+- **My team (department managers).** Everyone in the departments they
+  manage, with job title, contact details, and what each person has:
+  equipment, software by its friendly name, and access such as shared
+  mailboxes and printers. No prices, license names or iMIS details. Each
+  person has Request a change and Off boarding buttons that open the form
+  prefilled. Read only.
 - **My rentals and events.** Their upcoming and past requests, each with its
   room status and equipment status. Each one opens as an ordinary ticket page,
   where they can reply, change it or cancel it.
@@ -327,8 +335,11 @@ Starting form fields by ticket type. Every type also has Subject, Description,
 Priority, CC and Attachments.
 
 - **Support.** Category and Subcategory.
-- **Access & Equipment.** Category first (Onboarding, Access & Equipment
-  Change or Off Boarding), then that category's fields:
+- **Access & Equipment.** Only department managers (for people and new
+  hires in the departments they manage), technicians, admins and Event
+  Managers (HR, any department) can submit these. Other staff don't see the
+  type. Category first (Onboarding, Access & Equipment Change or Off
+  Boarding), then that category's fields:
   - **Onboarding.** New hire's first name, last name, display name,
     department, job title and start date, then equipment, software they
     need, shared mailboxes, calendars, phone lines and printers, filled in

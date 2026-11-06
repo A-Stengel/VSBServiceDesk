@@ -56,7 +56,9 @@ export function onboardingBody(value, showNewHire) {
 
 export const printerLabel = (p) => `${p.Name}${p.Location ? ` (${p.Location})` : ""}`;
 
-export default function OnboardingFields({ lookups, value, onChange, showNewHire, isTechnician }) {
+// departmentIds, when given, limits the new hire's department to those (a
+// manager's own departments).
+export default function OnboardingFields({ lookups, value, onChange, showNewHire, isTechnician, departmentIds }) {
   const hire = value.newHire;
   const titles = (lookups.jobTitles || []).filter((t) => t.DepartmentId === Number(hire.departmentId));
   const applications = lookups.applications || [];
@@ -140,7 +142,8 @@ export default function OnboardingFields({ lookups, value, onChange, showNewHire
               Department
               <select value={hire.departmentId} required onChange={(e) => setHire({ departmentId: e.target.value, jobTitleId: "", jobTitleName: "" })}>
                 <option value="">Choose</option>
-                {lookups.departments.map((d) => <option key={d.Id} value={d.Id}>{d.Name}</option>)}
+                {lookups.departments.filter((d) => !departmentIds || departmentIds.includes(d.Id))
+                  .map((d) => <option key={d.Id} value={d.Id}>{d.Name}</option>)}
               </select>
             </label>
             <label className="grow">

@@ -357,6 +357,17 @@ endpoint(
       }
     }
 
+    // Access & Equipment is for managers (their own departments), IT and HR
+    if (type.UsesChecklist && !user.IsTechnician && !user.IsEventManager) {
+      const managed = user.ManagedDepartmentIds || [];
+      if (!managed.length) throw new HttpError(403, "Only managers, IT and HR can submit access requests");
+      if (newHire && !managed.includes(newHire.departmentId)) throw new HttpError(400, "Pick one of the departments you manage");
+      if (forUserId) {
+        const person = await one(pool, "SELECT DepartmentId FROM dbo.Users WHERE Id = @Id", { Id: [sql.Int, forUserId] });
+        if (!person || !managed.includes(person.DepartmentId)) throw new HttpError(400, "Pick someone in a department you manage");
+      }
+    }
+
     // Onboarding always shows the equipment and software pick lists, and
     // fills in what the job title's defaults require
     const onboarding = checklistSource === "onboarding";
@@ -619,7 +630,8 @@ endpoint("getTicket", { methods: ["GET"], route: "tickets/{id:int}" }, async (re
         ORDER BY i.Name
       `)).recordset
     : [];
-  const checklist = access.equipment
+  // Requesters never see the checklist: it names licenses and iMIS access
+  const checklist = tech
     ? (await pool.request().input("Id", sql.Int, id).query(`
         SELECT ci.Id, ci.Label, ci.IsDone, ci.IsRemoval, ci.DoneAt, ${personName("u")} AS DoneByName, ci.SortOrder,
                ci.ApplicationId, ci.SoftwareId, ci.AccessKind, ci.AccessRefId, ci.AccessLevel, ci.AccessText
