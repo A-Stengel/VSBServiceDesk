@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../api.js";
 import { useApp } from "../App.jsx";
-import { describeSettings, normalizeSettings } from "../lists.js";
+import { applyList, describeSettings, normalizeSettings } from "../lists.js";
 
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const cleanFilters = (values) => Object.fromEntries(Object.entries(values).filter(([, v]) => v !== "" && v !== undefined && v !== null));
@@ -109,32 +109,13 @@ export function useListView(def, { defaultSort } = {}) {
 
   const activeFilters = Object.entries(cleanFilters(current.filters));
 
-  const apply = (rows) => {
-    if (!rows) return rows;
-    const q = search.trim().toLowerCase();
-    let out = rows.filter((row) => (!q || def.search(row).toLowerCase().includes(q)) &&
-      activeFilters.every(([key, value]) => {
-        const f = def.filters.find((x) => x.key === key);
-        return !f || f.test(row, value);
-      }));
-    if (sort && def.columns[sort.key]) {
-      const get = def.columns[sort.key];
-      out = [...out].sort((a, b) => {
-        const x = get(a);
-        const y = get(b);
-        const c = x === y ? 0 : x === null || x === undefined || x === "" ? 1 : y === null || y === undefined || y === "" ? -1
-          : typeof x === "number" && typeof y === "number" ? x - y : String(x).localeCompare(String(y), undefined, { numeric: true });
-        return sort.dir === "desc" ? -c : c;
-      });
-    }
-    return out;
-  };
+  const apply = (rows) => applyList(def, rows, { filters: current.filters, search, sort });
 
   return {
     me, def, tabs, error, active, base: def.bases.find((b) => b.key === current.base) || null, values: cleanFilters(current.filters),
     filters: def.filters, bases: def.bases, setValues, setBase, activeCount: activeFilters.length, changed, undo,
     search, setSearch, sort, toggleSort, apply, pickTab, saveToTab, saveAsNew, rename, move, remove, reset,
-    editing, setEditing, ready: !!tabs
+    editing, setEditing, ready: !!tabs, settings: { base: current.base, filters: cleanFilters(current.filters), sort }
   };
 }
 

@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
-import { Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { Link, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { api, isSignedIn } from "./api.js";
 import Icon from "./components/Icon.jsx";
 import Logo, { updateTabIcon } from "./components/Logo.jsx";
@@ -19,6 +19,7 @@ import Rentals from "./pages/Rentals.jsx";
 import Survey from "./pages/Survey.jsx";
 import HeldMail from "./pages/HeldMail.jsx";
 import MyTeam from "./pages/MyTeam.jsx";
+import Search from "./pages/Search.jsx";
 
 // The signed-in person, every pick-list and the message banner, shared by
 // every page.
@@ -140,6 +141,7 @@ function SignedInHeader({ me }) {
           {appName}
         </Link>
         <div className="top-actions">
+          {roles.technician && !gated && <HeaderSearch />}
           {!gated && (
             <Link to="/new" className="btn submit">
               <Icon name="plus" size={16} strokeWidth={2.4} />
@@ -168,6 +170,29 @@ function SignedInHeader({ me }) {
         </div>
       </div>
     </header>
+  );
+}
+
+// Technicians search every ticket from the header; the results are on the
+// Search page.
+function HeaderSearch() {
+  const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const [text, setText] = useState("");
+  useEffect(() => { if (pathname !== "/search") setText(""); }, [pathname]);
+  return (
+    <>
+      <form className="top-search" role="search" onSubmit={(e) => {
+        e.preventDefault();
+        if (text.trim()) navigate(`/search?q=${encodeURIComponent(text.trim())}`);
+      }}>
+        <Icon name="search" size={16} strokeWidth={2.2} />
+        <input type="search" placeholder="Search tickets" aria-label="Search tickets" value={text} onChange={(e) => setText(e.target.value)} />
+      </form>
+      <Link to="/search" className="hbtn top-search-icon" aria-label="Search tickets" title="Search tickets">
+        <Icon name="search" size={20} strokeWidth={2} />
+      </Link>
+    </>
   );
 }
 
@@ -216,6 +241,7 @@ const CRUMBS = [
   [/^\/people/, "People"],
   [/^\/inventory/, "Inventory"],
   [/^\/held-mail/, "Held mail"],
+  [/^\/search/, "Search"],
   [/^\/settings/, "Settings"]
 ];
 
@@ -368,6 +394,7 @@ export default function App() {
           {roles.technician && <Route path="/people/:id" element={<Person />} />}
           {roles.technician && <Route path="/inventory" element={<Inventory />} />}
           {roles.technician && <Route path="/held-mail" element={<HeldMail />} />}
+          {roles.technician && <Route path="/search" element={<Search />} />}
           {roles.technician && <Route path="/licenses" element={<Navigate to="/inventory?tab=licenses" replace />} />}
           {roles.settings && <Route path="/settings" element={<Settings />} />}
           <Route path="*" element={<p>Page not found.</p>} />

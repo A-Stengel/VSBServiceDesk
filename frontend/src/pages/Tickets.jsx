@@ -4,7 +4,7 @@ import { api } from "../api.js";
 import { useApp } from "../App.jsx";
 import TicketTable from "../components/TicketTable.jsx";
 import { ListTabs, ListToolbar, useListView } from "../components/ListView.jsx";
-import { ticketList } from "../lists.js";
+import { saveTicketContext, ticketList } from "../lists.js";
 
 // Every ticket list in one page. The tabs are the person's own (see
 // ListView.jsx); each one says which tickets it loads (mine or the whole
@@ -63,6 +63,14 @@ export default function Tickets() {
   }, [data, fetchKey, departments, me]);
 
   const rows = list.apply(tagged);
+
+  // The list beside a ticket shows these same tickets.
+  const contextKey = JSON.stringify([list.active?.Id, list.settings, list.search, departments, list.changed]);
+  useEffect(() => {
+    if (!roles.technician || !list.active) return;
+    saveTicketContext({ tabId: list.active.Id, settings: list.settings, search: list.search, departments, changed: list.changed });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contextKey, roles.technician]);
 
   return (
     <>

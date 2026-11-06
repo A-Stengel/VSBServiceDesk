@@ -190,3 +190,46 @@ export function describeSettings(def, settings) {
   if (!parts.length) parts.push("Everything");
   return parts.join(" · ");
 }
+
+// The rows a tab shows: its filters, the search box and the sort. Used by the
+// list pages and by the ticket list beside a ticket.
+export function applyList(def, rows, { filters = {}, search = "", sort = null } = {}) {
+  if (!rows) return rows;
+  const q = String(search || "").trim().toLowerCase();
+  const active = Object.entries(filters).filter(([, v]) => v !== "" && v !== undefined && v !== null);
+  let out = rows.filter((row) => (!q || def.search(row).toLowerCase().includes(q)) &&
+    active.every(([key, value]) => {
+      const f = def.filters.find((x) => x.key === key);
+      return !f || f.test(row, value);
+    }));
+  if (sort && def.columns[sort.key]) {
+    const get = def.columns[sort.key];
+    out = [...out].sort((a, b) => {
+      const x = get(a);
+      const y = get(b);
+      const c = x === y ? 0 : x === null || x === undefined || x === "" ? 1 : y === null || y === undefined || y === "" ? -1
+        : typeof x === "number" && typeof y === "number" ? x - y : String(x).localeCompare(String(y), undefined, { numeric: true });
+      return sort.dir === "desc" ? -c : c;
+    });
+  }
+  return out;
+}
+
+// The ticket list a technician last looked at (tab, filters, search, sort),
+// so the list beside a ticket shows the same tickets. Kept for this browser
+// tab only.
+const CONTEXT_KEY = "ticketListContext";
+export function saveTicketContext(context) {
+  try {
+    sessionStorage.setItem(CONTEXT_KEY, JSON.stringify(context));
+  } catch {
+    // Storage can be blocked; the side list then opens the first tab.
+  }
+}
+export function readTicketContext() {
+  try {
+    return JSON.parse(sessionStorage.getItem(CONTEXT_KEY) || "null");
+  } catch {
+    return null;
+  }
+}

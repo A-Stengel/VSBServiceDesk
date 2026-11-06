@@ -15,7 +15,7 @@ const { getConnection, withTransaction, sql } = require("../shared/db");
 const { getSettings } = require("../shared/settings");
 const { USER_SELECT } = require("../shared/auth");
 const { saveAttachments, finishRichText, readInlineNames } = require("../shared/attachments");
-const { hasContent } = require("../shared/richtext");
+const { hasContent, toPlain } = require("../shared/richtext");
 const { getAvailability, assertStock, assertTicketStock, assertSeats, readItems, addTicketItem } = require("../shared/inventory");
 const { getHoldings } = require("../shared/holdings");
 const { logChange } = require("../shared/changelog");
@@ -239,6 +239,74 @@ endpoint("listTickets", { methods: ["GET"], route: "tickets" }, async (request, 
     ORDER BY x.IsClosed, x.CreatedAt DESC
   `);
   return { jsonBody: result.recordset.map(({ Description, ...t }) => forViewer(t, user)) };
+});
+
+// ---------------------------------------------------------------------------
+// Search (technicians): every ticket, open or closed, by number, old number,
+// title, requester, the person it's for, CC, description, replies and notes.
+// Every word has to be found somewhere on the ticket.
+// ---------------------------------------------------------------------------
+
+const likeText = (word) => `%${word.replace(/[%_[]/g, "[$&]")}%`;
+
+// A short piece of text around the first word found, for the results list.
+function snippet(text, words) {
+  const plain = toPlain(text).replace(/\s+/g, " ").trim();
+  if (!plain) return "";
+  const lower = plain.toLowerCase();
+  const at = words.map((w) => lower.indexOf(w.toLowerCase())).filter((i) => i >= 0).sort((a, b) => a - b)[0];
+  if (at === undefined) return "";
+  const start = Math.max(0, at - 70);
+  const end = Math.min(plain.length, at + 130);
+  return `${start > 0 ? "…" : ""}${plain.slice(start, end)}${end < plain.length ? "…" : ""}`;
+}
+
+endpoint("searchTickets", { methods: ["GET"], route: "tickets/search", role: "technician" }, async (request, context, user) => {
+  const text = (request.query.get("q") || "").trim().slice(0, 200);
+  const words = [...new Set(text.split(/\s+/).filter(Boolean))].slice(0, 6);
+  if (!words.length) return { jsonBody: { tickets: [], words: [] } };
+
+  const pool = await getConnection();
+  const req = pool.request();
+  const where = words.map((word, i) => {
+    req.input(`W${i}`, sql.NVarChar(260), likeText(word));
+    const digits = /^#?\d+$/.test(word) ? Number(word.replace("#", "")) : null;
+    if (digits !== null && digits <= 2147483647) req.input(`N${i}`, sql.Int, digits);
+    return `(
+      t.Subject LIKE @W${i} OR t.Description LIKE @W${i} OR t.LegacyId LIKE @W${i} OR t.ForPersonName LIKE @W${i}
+      OR r.Email LIKE @W${i} OR ${personName("r")} LIKE @W${i}
+      OR (fu.Id IS NOT NULL AND ${personName("fu")} LIKE @W${i})
+      OR EXISTS (SELECT 1 FROM dbo.TicketCc sc2 WHERE sc2.TicketId = t.Id AND sc2.Email LIKE @W${i})
+      OR EXISTS (SELECT 1 FROM dbo.TicketConversations sv WHERE sv.TicketId = t.Id AND sv.Body LIKE @W${i})
+      ${digits !== null && digits <= 2147483647 ? `OR t.Id = @N${i}` : ""}
+    )`;
+  });
+
+  const result = await req.query(`
+    SELECT TOP (101) x.*,
+      (SELECT TOP (1) CONCAT(CASE WHEN sv.IsTechnicianNote = 1 THEN 'note' WHEN sv.Direction = 'out' THEN 'reply' ELSE 'message' END,
+              '|', ${personName("a")}, '|', sv.Body)
+         FROM dbo.TicketConversations sv
+         JOIN dbo.Users a ON a.Id = sv.AuthorId
+        WHERE sv.TicketId = x.Id AND (${words.map((_, i) => `sv.Body LIKE @W${i}`).join(" OR ")})
+        ORDER BY sv.CreatedAt DESC) AS FoundIn
+    FROM (${TICKET_SELECT} WHERE ${where.join(" AND ")}) x
+    ORDER BY x.IsClosed, x.UpdatedAt DESC
+  `);
+
+  const rows = result.recordset;
+  const tickets = rows.slice(0, 100).map(({ Description, FoundIn, ...t }) => {
+    const shaped = forViewer(t, user);
+    const inDescription = snippet(Description, words);
+    if (inDescription) return { ...shaped, MatchIn: "Description", Snippet: inDescription };
+    if (FoundIn) {
+      const [kind, author, ...body] = String(FoundIn).split("|");
+      const where = kind === "note" ? `Note by ${author}` : kind === "reply" ? `Reply from ${author}` : `Message from ${author}`;
+      return { ...shaped, MatchIn: where, Snippet: snippet(body.join("|"), words) };
+    }
+    return shaped;
+  });
+  return { jsonBody: { tickets, words, more: rows.length > 100 } };
 });
 
 // ---------------------------------------------------------------------------
