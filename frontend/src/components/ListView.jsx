@@ -131,9 +131,11 @@ export function ListTabs({ list }) {
             {list.active?.Id === t.Id && list.changed && <span className="tab-dot" title="Unsaved filter changes" />}
           </button>
         ))}
-        <button className="tab tab-edit" onClick={() => list.setEditing(!list.editing)} aria-expanded={list.editing}>
-          {list.editing ? "Done editing" : "Edit tabs"}
-        </button>
+        {!list.me?.ViewingAs && (
+          <button className="tab tab-edit" onClick={() => list.setEditing(!list.editing)} aria-expanded={list.editing}>
+            {list.editing ? "Done editing" : "Edit tabs"}
+          </button>
+        )}
       </div>
       {list.editing && <TabEditor list={list} />}
     </>
@@ -225,6 +227,9 @@ export function ListToolbar({ list, placeholder, children }) {
           </div>
           <FilterFields def={list.def} base={list.base?.key} values={list.values}
             onBase={list.setBase} onValues={list.setValues} />
+          {list.me?.ViewingAs ? (
+            <p className="muted small" style={{ margin: 0 }}>Filters aren&apos;t saved while viewing as another role.</p>
+          ) : (
           <div className="save-bar">
             <button className="btn sm pri" disabled={!list.changed} onClick={() => run(list.saveToTab, `Saved the ${list.active.Name} tab.`)}>
               Save to “{list.active.Name}”
@@ -236,6 +241,7 @@ export function ListToolbar({ list, placeholder, children }) {
               Save as new tab
             </button>
           </div>
+          )}
           <p className="muted small" style={{ margin: 0 }}>Sorting by a column header is saved with the tab too.</p>
         </div>
       )}

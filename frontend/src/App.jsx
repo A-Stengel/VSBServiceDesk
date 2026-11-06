@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
-import { api, isSignedIn } from "./api.js";
+import { api, isSignedIn, setViewAsRole } from "./api.js";
 import Icon from "./components/Icon.jsx";
 import Logo, { updateTabIcon } from "./components/Logo.jsx";
 import LoadingScreen, { ATTEMPTS } from "./components/LoadingScreen.jsx";
@@ -117,7 +117,12 @@ function Header({ me }) {
       </header>
     );
   }
-  return <SignedInHeader me={me} />;
+  return (
+    <>
+      <SignedInHeader me={me} />
+      <ViewAsBanner me={me} />
+    </>
+  );
 }
 
 function SignedInHeader({ me }) {
@@ -161,7 +166,8 @@ function SignedInHeader({ me }) {
             </button>
             {open && (
               <div className="card menu">
-                <div className="who">{me.Email}<br />{me.RoleName}</div>
+                <div className="who">{me.Email}<br />{me.ViewingAs ? me.ViewingAs.RealRoleName : me.RoleName}</div>
+                {me.CanViewAs && <ViewAsPicker me={me} />}
                 <ModePicker />
                 <a className="btn ghost sm" href="/logout">Sign out</a>
               </div>
@@ -193,6 +199,38 @@ function HeaderSearch() {
         <Icon name="search" size={20} strokeWidth={2} />
       </Link>
     </>
+  );
+}
+
+// Admins only: look at the site as another role. The server then answers as
+// that role, so hidden things (prices, technician pages) are really hidden.
+function ViewAsPicker({ me }) {
+  const ownRoleId = me.ViewingAs ? me.ViewingAs.RealRoleId : me.RoleId;
+  const current = me.ViewingAs ? me.ViewingAs.RoleId : ownRoleId;
+  return (
+    <div className="mode-picker">
+      <label className="lbl" htmlFor="view-as">View as</label>
+      <select id="view-as" value={current ?? ""} onChange={(e) => {
+        const id = Number(e.target.value);
+        setViewAsRole(id === ownRoleId ? null : id);
+      }}>
+        {(me.ViewAsRoles || []).map((r) => (
+          <option key={r.Id} value={r.Id}>{r.Id === ownRoleId ? `${r.Name} (you)` : r.Name}</option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+// A strip under the header while an admin is viewing as another role, with
+// the way back.
+function ViewAsBanner({ me }) {
+  if (!me?.ViewingAs) return null;
+  return (
+    <div className="view-as-bar" role="status">
+      <span>Viewing as <strong>{me.ViewingAs.RoleName}</strong>. You see and can do only what that role can.</span>
+      <button className="btn sm" onClick={() => setViewAsRole(null)}>Back to my view</button>
+    </div>
   );
 }
 

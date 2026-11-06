@@ -34,6 +34,12 @@ function audienceOf(user, list) {
   return "requester";
 }
 
+// Tabs can't be changed while an admin is viewing as another role: the tabs
+// shown then are that role's defaults, not theirs.
+function notWhileViewingAs(user) {
+  if (user.ViewingAs) throw new HttpError(400, "Tabs can't be changed while viewing as another role. Switch back to your own view first.");
+}
+
 function canUse(user, list) {
   return list !== "people" || !!user.IsTechnician;
 }
@@ -98,6 +104,14 @@ async function loadOwn(db, id, userId) {
 endpoint("listViews", { methods: ["GET"], route: "views" }, async (request, context, user) => {
   const list = listKey(request.query.get("list"));
   if (!canUse(user, list)) return { jsonBody: [] };
+  if (user.ViewingAs) {
+    // An admin viewing as another role sees that role's default tabs, and
+    // their own tabs are left alone.
+    const pool = await getConnection();
+    const result = await pool.request().input("List", sql.NVarChar(20), list).input("Audience", sql.NVarChar(20), audienceOf(user, list))
+      .query("SELECT Id, Name, Settings, Position FROM dbo.DefaultTabs WHERE ListKey = @List AND Audience = @Audience ORDER BY Position, Id");
+    return { jsonBody: result.recordset.map((row) => ({ ...shape(row), Preview: true })) };
+  }
   await withTransaction((tx) => ensureTabs(tx, user, list));
   const pool = await getConnection();
   return { jsonBody: await myTabs(pool, user.Id, list) };
@@ -105,6 +119,7 @@ endpoint("listViews", { methods: ["GET"], route: "views" }, async (request, cont
 
 // Body: { list, name, settings }  Adds a tab at the end.
 endpoint("createView", { methods: ["POST"], route: "views", failMessage: "Could not add the tab" }, async (request, context, user) => {
+  notWhileViewingAs(user);
   const body = await readJson(request);
   const list = listKey(body.list);
   if (!canUse(user, list)) throw new HttpError(403, "Only technicians can save people tabs");
@@ -136,6 +151,7 @@ endpoint("createView", { methods: ["POST"], route: "views", failMessage: "Could 
 
 // Body: { name?, settings? }  Renames a tab or saves its filters.
 endpoint("updateView", { methods: ["PATCH"], route: "views/{id:int}", failMessage: "Could not save the tab" }, async (request, context, user) => {
+  notWhileViewingAs(user);
   const id = Number(request.params.id);
   const body = await readJson(request);
   const pool = await getConnection();
@@ -157,6 +173,7 @@ endpoint("updateView", { methods: ["PATCH"], route: "views/{id:int}", failMessag
 
 // Your own tabs. The last tab on a list can't be removed.
 endpoint("deleteView", { methods: ["DELETE"], route: "views/{id:int}" }, async (request, context, user) => {
+  notWhileViewingAs(user);
   const id = Number(request.params.id);
   await withTransaction(async (tx) => {
     const view = await loadOwn(tx, id, user.Id);
@@ -170,6 +187,7 @@ endpoint("deleteView", { methods: ["DELETE"], route: "views/{id:int}" }, async (
 
 // Body: { list, ids: [tab ids in the new order] }
 endpoint("orderViews", { methods: ["PUT"], route: "views/order", failMessage: "Could not reorder the tabs" }, async (request, context, user) => {
+  notWhileViewingAs(user);
   const body = await readJson(request);
   const list = listKey(body.list);
   if (!Array.isArray(body.ids)) throw new HttpError(400, "Send the tabs in order");
@@ -188,6 +206,7 @@ endpoint("orderViews", { methods: ["PUT"], route: "views/order", failMessage: "C
 
 // Body: { list }  Puts your tabs back to the current defaults.
 endpoint("resetViews", { methods: ["POST"], route: "views/reset", failMessage: "Could not reset the tabs" }, async (request, context, user) => {
+  notWhileViewingAs(user);
   const body = await readJson(request);
   const list = listKey(body.list);
   await withTransaction(async (tx) => {
