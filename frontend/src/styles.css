@@ -481,3 +481,57 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 14px; }
 .team-holds .lbl { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-bottom: 4px; }
 ul.plain { list-style: none; margin: 0; padding: 0; }
 ul.plain li { padding: 2px 0; overflow-wrap: anywhere; }
+
+/* Ticket list beside a ticket (technicians) */
+.page:has(> .with-list.open) { max-width: 1560px; }
+.with-list { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 20px; align-items: start; }
+.with-list.closed { grid-template-columns: 44px minmax(0, 1fr); }
+.with-list-main { min-width: 0; }
+.side-list { position: sticky; top: 12px; padding: 0; display: flex; flex-direction: column; max-height: calc(100vh - 24px); overflow: hidden; }
+.side-head { display: grid; gap: 8px; padding: 12px; border-bottom: 1px solid var(--line); }
+.side-head select { width: 100%; }
+.side-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.side-chip { font-size: 12px; background: var(--acc-soft); border-radius: 999px; padding: 1px 8px; }
+.side-chip.unsaved { background: var(--note); }
+.side-rows { overflow-y: auto; flex: 1; }
+.side-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 3px; padding: 9px 12px; border-bottom: 1px solid var(--line-soft); border-left: 4px solid transparent; color: var(--text); text-decoration: none; }
+.side-row:hover { background: var(--hover); }
+.side-row.on { background: var(--acc-soft); border-left-color: var(--acc); }
+.side-subject { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.side-meta { display: flex; justify-content: space-between; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); }
+.side-meta > span:first-child { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.initials { display: inline-grid; place-items: center; flex: none; width: 24px; height: 24px; border-radius: 50%; background: var(--pill); color: var(--text); font-size: 11px; font-weight: 700; }
+.initials.none { background: transparent; border: 1px dashed var(--muted); color: var(--muted); }
+.side-rail { position: sticky; top: 12px; display: grid; justify-items: center; gap: 8px; padding: 8px 6px; }
+.side-rail-text { writing-mode: vertical-rl; transform: rotate(180deg); font-size: 13px; font-weight: 600; color: var(--muted); }
+.side-list-btn, .side-backdrop { display: none; }
+@media (max-width: 1100px) {
+  .page:has(> .with-list.open) { max-width: 1180px; }
+  .with-list, .with-list.closed { grid-template-columns: minmax(0, 1fr); }
+  .with-list > .side-list, .with-list > .side-rail { display: none; }
+  .side-list-btn { display: inline-block; margin-bottom: 12px; }
+  .with-list.drawer > .side-list {
+    display: flex; position: fixed; z-index: 30; left: 0; top: 0; bottom: 0; width: min(320px, 88vw);
+    max-height: none; border-radius: 0; padding-top: env(safe-area-inset-top, 0px);
+  }
+  .with-list.drawer > .side-backdrop { display: block; position: fixed; inset: 0; z-index: 29; border: 0; background: rgba(0, 0, 0, 0.35); }
+}
+
+/* Ticket search (technicians) */
+.top-search { display: flex; align-items: center; gap: 6px; background: rgba(127, 127, 127, 0.22); border-radius: 8px; padding: 0 10px; min-height: 38px; }
+.top-search input { background: transparent; border: 0; color: inherit; width: 200px; min-height: 36px; padding: 0; }
+.top-search input::placeholder { color: inherit; opacity: 0.75; }
+.top-search:focus-within { outline: 2px solid var(--focus); }
+.top-search input:focus { outline: none; box-shadow: none; }
+.top-search-icon { display: none; }
+@media (max-width: 760px) {
+  .top-search { display: none; }
+  .top-search-icon { display: flex; width: 44px; justify-content: center; padding: 0; }
+}
+.search-results { display: grid; }
+.search-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); color: var(--text); text-decoration: none; }
+.search-row:last-child { border-bottom: 0; }
+.search-row:hover { background: var(--hover); }
+.search-subject { font-weight: 600; min-width: 0; }
+.search-snippet { color: var(--muted); line-height: 1.45; }
+.search-row mark { background: var(--note); color: var(--text); border-radius: 3px; padding: 0 2px; }

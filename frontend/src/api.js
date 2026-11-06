@@ -103,6 +103,7 @@ export const api = {
 
   tickets: (filters = {}) => request("GET", "tickets" + query(filters)),
   ticket: (id) => request("GET", `tickets/${id}`),
+  searchTickets: (q) => request("GET", "tickets/search" + query({ q })),
   createTicket: (data, files) => request("POST", "tickets", withFiles(data, files)),
   updateTicket: (id, data) => request("PATCH", `tickets/${id}`, data),
   addConversation: (id, data, files) => request("POST", `tickets/${id}/conversations`, withFiles(data, files)),

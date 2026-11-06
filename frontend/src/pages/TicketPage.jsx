@@ -5,6 +5,7 @@ import { useApp } from "../App.jsx";
 import { ACCESS_TEXT, IMIS_LEVELS } from "../access.js";
 import PersonPicker from "../components/PersonPicker.jsx";
 import BookingForm from "../components/BookingForm.jsx";
+import WithTicketList from "../components/TicketSideList.jsx";
 import RichEditor from "../components/RichEditor.jsx";
 import RichText from "../components/RichText.jsx";
 import { hasContent, plainToRich, withPastedImages } from "../richtext.js";
@@ -15,6 +16,13 @@ import { hasContent, plainToRich, withPastedImages } from "../richtext.js";
 // HR notes and the room's history, but no equipment, technician notes,
 // status or technician.
 export default function TicketPage() {
+  const { id } = useParams();
+  const { me } = useApp();
+  if (!me.IsTechnician) return <TicketView />;
+  return <WithTicketList id={id}><TicketView /></WithTicketList>;
+}
+
+function TicketView() {
   const { id } = useParams();
   const { me, lookups } = useApp();
   const [data, setData] = useState(null);
