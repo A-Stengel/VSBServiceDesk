@@ -103,6 +103,7 @@ async function getCurrentUser(request) {
   }
 
   if (!user.IsActive) throw new HttpError(403, "Your account has been deactivated");
+  await applyViewAs(pool, request, user);
   // The departments they manage (they can see and reply on those people's
   // tickets) and whether their "Show my departments' tickets" switch is on.
   const managed = await pool.request().input("Id", sql.Int, user.Id).query(`
@@ -116,4 +117,42 @@ async function getCurrentUser(request) {
   return user;
 }
 
-module.exports = { getCurrentUser, USER_SELECT, isStaffEmail };
+// Admins can look at the site as another role ("View as" in the account
+// menu). The browser sends the role's id in this header, and every check on
+// the server then uses that role's access, so anything the role can't see
+// (prices, technician pages, Settings) is really hidden. The person stays
+// themselves: their own tickets, name and department. Ignored for anyone
+// who isn't an admin.
+const VIEW_AS_HEADER = "x-view-as-role";
+
+async function applyViewAs(db, request, user) {
+  user.CanViewAs = !!user.IsAdmin;
+  user.ViewingAs = null;
+  const value = request.headers?.get?.(VIEW_AS_HEADER);
+  if (!user.IsAdmin || !value) return;
+  const roleId = Number(value);
+  if (!Number.isInteger(roleId) || roleId <= 0 || roleId === user.RoleId) return;
+  const result = await db.request().input("Id", sql.Int, roleId).query(`
+    SELECT Id, Name,
+           CAST(IsTechnician | IsAdmin AS BIT) AS IsTechnician,
+           IsAdmin,
+           CAST(COALESCE(IsEventManager, 0) | IsTechnician | IsAdmin AS BIT) AS IsEventManager
+    FROM dbo.Roles WHERE Id = @Id AND IsActive = 1
+  `);
+  const role = result.recordset[0];
+  if (!role) return;
+  user.ViewingAs = { RoleId: role.Id, RoleName: role.Name, RealRoleId: user.RoleId, RealRoleName: user.RoleName };
+  user.RoleId = role.Id;
+  user.RoleName = role.Name;
+  user.IsTechnician = !!role.IsTechnician;
+  user.IsAdmin = !!role.IsAdmin;
+  user.IsEventManager = !!role.IsEventManager;
+}
+
+// The roles an admin can switch to, for the account menu.
+async function viewAsRoles(db) {
+  const result = await db.request().query("SELECT Id, Name FROM dbo.Roles WHERE IsActive = 1 ORDER BY SortOrder, Name");
+  return result.recordset;
+}
+
+module.exports = { getCurrentUser, USER_SELECT, isStaffEmail, viewAsRoles };

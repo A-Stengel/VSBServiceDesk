@@ -535,3 +535,7 @@ ul.plain li { padding: 2px 0; overflow-wrap: anywhere; }
 .search-subject { font-weight: 600; min-width: 0; }
 .search-snippet { color: var(--muted); line-height: 1.45; }
 .search-row mark { background: var(--note); color: var(--text); border-radius: 3px; padding: 0 2px; }
+
+/* "View as" strip shown while an admin looks at the site as another role */
+.view-as-bar { display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap; padding: 8px 16px; background: var(--flag-bg); color: var(--text); border-bottom: 1px solid var(--flag-line); font-size: 14px; }
+.mode-picker select { width: 100%; }

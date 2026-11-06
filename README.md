@@ -405,6 +405,23 @@ Roles come from the Roles list. A role with Technician ticked gives
 technician access, Admin ticked gives both, and Event Manager ticked gives
 event booking access.
 
+### View as another role
+
+Admins can look at the site as any active role: open the menu under your
+name and pick one under **View as**. A strip under the header shows which
+role you're viewing as, with **Back to my view**. While viewing as a role:
+
+- The server answers as that role, so anything it can't see (prices,
+  technician pages, Settings) is really hidden, and anything it can't do is
+  refused.
+- You're still yourself: your own tickets, name and department. Anything you
+  submit or change is saved under your name.
+- Lists show that role's default tabs, and tabs can't be changed.
+- It lasts for that browser tab only. Closing the tab or signing out goes
+  back to your own view.
+
+No database script is needed. Publish the API after merging.
+
 ### Delete the retired ticket types (script 10)
 
 Run `10_delete_retired_ticket_types.sql` once to remove the four ticket types

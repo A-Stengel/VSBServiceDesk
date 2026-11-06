@@ -1,11 +1,40 @@
 // Small wrapper around fetch for the /api routes. Errors carry the server's
 // message so pages can show it, and the HTTP status (none when the request
 // never reached the server).
+// "View as" (admins): the role this browser tab is looking at the site as.
+// The server only honors it for admins. Kept for this tab only, so closing
+// the tab goes back to the person's own view.
+const VIEW_AS_KEY = "viewAsRole";
+
+export function viewAsRole() {
+  try {
+    return sessionStorage.getItem(VIEW_AS_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+// Switches the view (or back, with no role) and reloads on the home page,
+// since every page and list depends on the role.
+export function setViewAsRole(roleId) {
+  try {
+    if (roleId) sessionStorage.setItem(VIEW_AS_KEY, String(roleId));
+    else sessionStorage.removeItem(VIEW_AS_KEY);
+  } catch {
+    // storage blocked: the view just can't be switched
+  }
+  window.location.assign("/");
+}
+
 async function request(method, path, body) {
   const isForm = body instanceof FormData;
+  const headers = {};
+  if (body && !isForm) headers["Content-Type"] = "application/json";
+  const viewAs = viewAsRole();
+  if (viewAs) headers["X-View-As-Role"] = viewAs;
   const response = await fetch(`/api/${path}`, {
     method,
-    headers: body && !isForm ? { "Content-Type": "application/json" } : undefined,
+    headers,
     body: body ? (isForm ? body : JSON.stringify(body)) : undefined
   });
   if (response.status === 401) {
